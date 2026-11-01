@@ -7,6 +7,12 @@ export const BLOB_STRIDE = 8
 /** Upper bound the renderer sizes its texture for. */
 export const MAX_BLOBS = 256
 
+/**
+ * A blob of radius r contributes to the density field out to r * INFLUENCE_FACTOR.
+ * The renderer's metaball splat and the sim's density sampler must use the same value.
+ */
+export const INFLUENCE_FACTOR = 2.2
+
 /** Field offsets inside one blob record. */
 export const BLOB = {
   x: 0,

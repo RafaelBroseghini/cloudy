@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "box2d3-wasm": "6.0.0",
     "three": "0.187.0"
   },
   "devDependencies": {

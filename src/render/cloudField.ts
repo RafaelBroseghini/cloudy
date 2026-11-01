@@ -34,11 +34,9 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
+import { BLOB_STRIDE, INFLUENCE_FACTOR, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { VIEW_HEIGHT } from "./view.ts";
 
-/** A blob of radius r influences the field out to r * INFLUENCE_FACTOR. The sim's density sampler must match. */
-export const INFLUENCE_FACTOR = 2.2;
 
 /**
  * The splat pass reads the sim's blob buffer in place: the geometry's instance attributes are two
