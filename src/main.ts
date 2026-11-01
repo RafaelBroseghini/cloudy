@@ -1,50 +1,19 @@
+import { createPointerInput } from "./input/pointer.ts";
 import { createRenderer } from "./render/renderer.ts";
 import { createScene } from "./render/scene.ts";
-import { clientToWorld } from "./render/view.ts";
-import { installHarness, parseBackendParam, type GameState } from "./harness.ts";
-import { BLOB, BLOB_STRIDE, createBlobBuffer } from "./sim/blobBuffer.ts";
+import { VIEW_HEIGHT, viewWidth } from "./render/view.ts";
+import {
+  cloudCentresFromBuffer,
+  installHarness,
+  parseBackendParam,
+  type GameHarnessApi,
+} from "./harness.ts";
+import { createBlobBuffer, createSim, FIXED_DT, type Pointer, type SceneName } from "./sim/index.ts";
 
-const state: GameState = { backend: null, frame: 0, ready: false };
-
-installHarness({
-  getState: () => ({ ...state }),
-});
-
-const DEMO_CLOUDS = [
-  { x: -3.6, y: 0.8, blobs: 30, w: 1.9 },
-  { x: 3.2, y: -2.4, blobs: 30, w: 2.2 },
-  { x: 0.2, y: 2.9, blobs: 30, w: 1.6 },
-] as const;
-
-// TEMPORARY: synthetic blobs until the sim is wired in. Delete this function and its call.
-function demoBlobs(buf: Float32Array, t: number): number {
-  let n = 0;
-  DEMO_CLOUDS.forEach((cloud, cloudId) => {
-    for (let i = 0; i < cloud.blobs; i++) {
-      // Deterministic pseudo-random layout: a flat-bottomed heap of overlapping blobs.
-      const a = Math.sin((i + 1) * 12.9898 + cloudId * 78.233) * 43758.5453;
-      const b = Math.sin((i + 1) * 39.346 + cloudId * 11.135) * 24634.6345;
-      const ra = a - Math.floor(a);
-      const rb = b - Math.floor(b);
-      const u = (i + ra * 0.6) / cloud.blobs;
-      const px = (u - 0.5) * 2 * cloud.w;
-      const dome = Math.sqrt(Math.max(0, 1 - (px / cloud.w) ** 2));
-      const py = dome * (0.05 + rb * rb * 1.5);
-      const wob = 0.06;
-      const o = n * BLOB_STRIDE;
-      buf[o + BLOB.x] = cloud.x + px + Math.sin(t * 0.7 + i * 1.7) * wob;
-      buf[o + BLOB.y] = cloud.y + py + Math.cos(t * 0.9 + i * 2.3) * wob;
-      buf[o + BLOB.radius] = 0.28 + 0.55 * dome * ra * ra;
-      buf[o + BLOB.mass] = 1;
-      buf[o + BLOB.vx] = 0;
-      buf[o + BLOB.vy] = 0;
-      buf[o + BLOB.cloudId] = cloudId;
-      buf[o + BLOB.alive] = 1;
-      n++;
-    }
-  });
-  return n;
-}
+/** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
+const RENDER_INTERVAL_MS = 1000 / 60;
+/** rAF timestamps jitter by a ms or so; without slack a 60 Hz display would skip every other frame. */
+const RENDER_SLACK_MS = 2;
 
 async function main(): Promise<void> {
   const canvasHost = document.getElementById("app");
@@ -55,34 +24,117 @@ async function main(): Promise<void> {
   const { renderer, backend } = await createRenderer(canvasHost, {
     forceWebGL: parseBackendParam(location.search),
   });
-  renderer.domElement.style.touchAction = "none";
+  const canvas = renderer.domElement;
+  canvas.style.touchAction = "none";
 
   const scene = await createScene(renderer);
-  window.addEventListener("resize", () => scene.resize(window.innerWidth, window.innerHeight));
-
-  // TEMPORARY: the real cursor comes from the input layer; this circles slowly.
-  const pointer = { x: 0, y: 0, active: false };
-  window.addEventListener("pointermove", (e) => {
-    const w = clientToWorld(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
-    pointer.x = w.x;
-    pointer.y = w.y;
-    pointer.active = true;
-  });
-
+  const sim = await createSim();
+  const input = createPointerInput(canvas);
   const blobs = createBlobBuffer();
 
-  state.backend = backend;
-  state.ready = true;
+  const loadScene = (name: SceneName): void => {
+    sim.loadScene(name, viewWidth(window.innerWidth / window.innerHeight), VIEW_HEIGHT);
+  };
+  loadScene("m1");
+
+  // Resize only refits the camera and field; clouds keep their world positions (no scene reload).
+  window.addEventListener("resize", () => scene.resize(window.innerWidth, window.innerHeight));
+
+  let paused = false;
+  let ready = false;
+  let frame = 0;
+  // Harness override of the live pointer; null means real input.
+  let override: Pointer | null = null;
+
+  const currentPointer = (): Pointer => override ?? input.read();
+
+  /** Push the sim's current state to the renderer. */
+  const present = (): void => {
+    scene.setBlobs(blobs, sim.writeBlobs(blobs));
+    const c = sim.snapshot().cursor;
+    scene.setCursor(c.present ? { x: c.x, y: c.y } : null);
+  };
+
+  const stepFixed = (n: number): void => {
+    for (let i = 0; i < n; i++) sim.step();
+  };
+
+  const harness: GameHarnessApi = {
+    getState() {
+      const s = sim.snapshot();
+      return {
+        ready,
+        backend,
+        frame,
+        step: s.step,
+        paused,
+        clouds: s.clouds,
+        blobs: s.blobs,
+        springs: s.springs,
+        cursor: { x: s.cursor.x, y: s.cursor.y, present: s.cursor.present },
+        densityAtCursor: s.densityAtCursor,
+        view: { width: viewWidth(window.innerWidth / window.innerHeight), height: VIEW_HEIGHT },
+      };
+    },
+    pause(on) {
+      paused = on;
+    },
+    tick(ms) {
+      sim.setPointer(currentPointer());
+      stepFixed(Math.max(0, Math.round(ms / (FIXED_DT * 1000))));
+      present();
+    },
+    pointer(x, y) {
+      override = { kind: "present", x, y };
+    },
+    pointerAbsent() {
+      override = { kind: "absent" };
+    },
+    pointerRelease() {
+      override = null;
+    },
+    drag(x0, y0, x1, y1, seconds) {
+      const n = Math.max(1, Math.round(seconds / FIXED_DT));
+      for (let i = 1; i <= n; i++) {
+        const u = i / n;
+        override = { kind: "present", x: x0 + (x1 - x0) * u, y: y0 + (y1 - y0) * u };
+        sim.setPointer(override);
+        sim.step();
+      }
+      present();
+    },
+    loadScene(name) {
+      loadScene(name);
+      present();
+    },
+    getParams: () => sim.getParams(),
+    setParams: (partial) => sim.setParams(partial),
+    cloudCentres() {
+      return cloudCentresFromBuffer(blobs, sim.writeBlobs(blobs));
+    },
+  };
+  installHarness(harness);
+
+  let lastMs: number | null = null;
+  let lastRenderMs = -Infinity;
 
   renderer.setAnimationLoop((ms) => {
-    const t = ms / 1000;
-    const count = demoBlobs(blobs, t);
-    scene.setBlobs(blobs, count);
-    scene.setCursor(pointer.active ? pointer : { x: Math.cos(t * 0.5) * 3.5, y: Math.sin(t * 0.5) * 2.5 });
-    scene.setTime(t);
+    const elapsed = lastMs === null ? 0 : (ms - lastMs) / 1000;
+    lastMs = ms;
+
+    // Pointer is drained every rAF, so a skipped render never drops input.
+    sim.setPointer(currentPointer());
+    if (!paused) sim.advance(elapsed);
+
+    if (ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
+    lastRenderMs = ms;
+    present();
+    scene.setTime(ms / 1000);
     scene.render();
-    state.frame += 1;
+    frame += 1;
   });
+
+  ready = true;
 }
 
 void main();
