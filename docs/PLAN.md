@@ -25,7 +25,7 @@ A 2.5D browser toy played with mouse, trackpad or touch. The cursor pushes throu
 ## Stack
 
 - TypeScript, three.js r187 `WebGPURenderer` with TSL node materials (`three/webgpu`, `three/tsl`). `?backend=webgl` forces WebGL2 via `forceWebGL`.
-- Physics: a wasm 2D physics library for the blob springs where it fits (see `docs/` notes once chosen).
+- Physics: Box2D v3 (`box2d3-wasm`) for blob bodies and spring joints; see `docs/SIM.md` for why and where M1 departs from the model below.
 - Web Audio API directly for thunder. Plain DOM range inputs for player sliders; lil-gui only for dev panels.
 - Settings: versioned, schema-validated JSON in localStorage, clamped on load, defaults when invalid.
 - Tests: Vitest + fast-check. TLA+ model later.
@@ -35,6 +35,8 @@ A 2.5D browser toy played with mouse, trackpad or touch. The cursor pushes throu
 `P = defaults ⊕ scene ⊕ weather ⊕ user sliders ⊕ transient` (later wins per field). Layers: sky, lighting, weather, cloud field, interaction, post FX, depth layers. Every field declares its blend kind and valid range. Features stay fixed and are turned off by weight; pipelines warm with `compileAsync` so blends never compile.
 
 ## Sim model (middle layer, CPU, fixed step)
+
+Implemented M1 deviations from this model are listed in `docs/SIM.md`.
 
 Density: `ρ(x) = Σ m_i · W(|x − p_i| / r_i)`, `W(q) = (1 − q²)³` for `q < 1`, else 0. Spatial hash lookup.
 
