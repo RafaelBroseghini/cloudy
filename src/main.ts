@@ -134,8 +134,11 @@ async function main(): Promise<void> {
     if (!paused) sim.advance(elapsed);
 
     if (ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
+    const renderDt = Number.isFinite(lastRenderMs) ? (ms - lastRenderMs) / 1000 : 0;
     lastRenderMs = ms;
     present();
+    const ptr = currentPointer();
+    scene.updateScenery(ptr.kind === "present" ? { x: ptr.x, y: ptr.y } : null, renderDt);
     scene.setTime(ms / 1000);
     scene.render();
     frame += 1;

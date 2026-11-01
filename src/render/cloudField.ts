@@ -132,6 +132,13 @@ export function createCloudLook() {
 
 export type CloudLook = ReturnType<typeof createCloudLook>;
 
+/** Raw play-layer density at a world position (the splat target sampled y-down like `shadeClouds`). */
+export function sampleFieldDensity(fieldTex: RenderTarget["texture"], aspect: Node<"float">) {
+  const field = texture(fieldTex);
+  const extent = vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT);
+  return (p: Node<"vec2">): Node<"float"> => field.sample(p.div(extent).add(0.5).flipY()).r;
+}
+
 /**
  * Returns the cloud colour (rgb) and coverage (a) at world position `wp`.
  * `time` and `aspect` are uniform nodes; `fieldTex` is the splat target's texture.
