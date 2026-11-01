@@ -55,6 +55,13 @@ Drive and read state through `window.__GAME__` (`src/harness.ts`), never by scra
 - Tests sit next to code as `*.test.ts`. Prefer fast-check properties for sim invariants (see `docs/PLAN.md`).
 - Match the surrounding code. Comments say why, not what.
 
+## Where things are
+
+- `docs/PLAN.md`: target design, milestones, invariants and perf targets.
+- `docs/SIM.md`: how the sim maps onto Box2D, where it departs from PLAN, and every param.
+- `docs/HARNESS.md`: the full `window.__GAME__` API with a split-then-merge example.
+- `.agents/skills/verify`: browser verification (real WebGPU needs a visible window under WSLg).
+
 ## Keep this file small
 
 It is loaded into every agent's context. Add a rule only if an agent would get it wrong without it. Put explanations and numbers in `docs/`.
