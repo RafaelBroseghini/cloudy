@@ -37,8 +37,13 @@ async function main(): Promise<void> {
   };
   loadScene("m1");
 
-  // Resize only refits the camera and field; clouds keep their world positions (no scene reload).
-  window.addEventListener("resize", () => scene.resize(window.innerWidth, window.innerHeight));
+  // Resize refits the camera, field and containment rect; clouds keep their world positions (no scene reload).
+  const fitView = (): void => {
+    scene.resize(window.innerWidth, window.innerHeight);
+    sim.setBounds(viewWidth(window.innerWidth / window.innerHeight), VIEW_HEIGHT);
+  };
+  window.addEventListener("resize", fitView);
+  fitView();
 
   let paused = false;
   let ready = false;

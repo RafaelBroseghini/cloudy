@@ -261,10 +261,21 @@ describe('cursor', () => {
   it('is slowed by cloud density: the cursor inside a cloud lags a free one', async () => {
     const dense = await make(oneCloud)
     const free = await make('empty')
-    const path = (i: number) => ({ x: -5 + i * 0.1, y: 0.1 })
-    run(dense, 90, path)
-    run(free, 90, path)
-    expect(dense.snapshot().cursor.x).toBeLessThan(free.snapshot().cursor.x - 0.3)
+    // 30 units/s through the middle of the cloud; density drag is the only lag the free cursor lacks.
+    const maxLag = (sim: Sim): number => {
+      let worst = 0
+      for (let i = 0; i < 45; i++) {
+        const x = -6 + i * 0.5
+        sim.setPointer({ kind: 'present', x, y: 0.1 })
+        sim.step()
+        worst = Math.max(worst, x - sim.snapshot().cursor.x)
+      }
+      return worst
+    }
+    const lagFree = maxLag(free)
+    const lagDense = maxLag(dense)
+    expect(lagFree).toBeLessThan(0.15)
+    expect(lagDense).toBeGreaterThan(lagFree + 0.15)
   })
 })
 
@@ -413,7 +424,7 @@ describe('springs, split and merge', () => {
     fc.assert(
       fc.asyncProperty(
         fc.array(fc.tuple(fc.double({ min: -8, max: 8, noNaN: true }), fc.double({ min: -4.5, max: 4.5, noNaN: true })), { minLength: 2, maxLength: 5 }),
-        fc.double({ min: 2, max: 30, noNaN: true }),
+        fc.double({ min: 2, max: 150, noNaN: true }),
         async (way, speed) => {
           const sim = await make('m1')
           const mass = sim.inspect().mass.reduce((a, b) => a + b, 0)

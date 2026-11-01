@@ -62,8 +62,9 @@ describe('drag', () => {
 })
 
 describe('cursor step', () => {
-  const P: CursorParams = { k_r: 80, m_c: 1, k_p: 220, c_p: 24, cursorMaxSpeed: 28 }
+  const P: CursorParams = { k_r: 80, m_c: 1, k_p: 4000, c_p: 120, cursorMaxSpeed: 240 }
   const dt = 1 / 60
+  const still = { x: 0, y: 0 }
 
   it('with no pull, density drag only slows the cursor, more so in denser air, and never flips its direction', () => {
     fc.assert(
@@ -71,8 +72,8 @@ describe('cursor step', () => {
         const [lo, hi] = r1 <= r2 ? [r1, r2] : [r2, r1]
         const s = { x: 1, y: 2, vx, vy }
         const ptr = { kind: 'present', x: 1, y: 2 } as const
-        const a = stepCursor(s, ptr, P, lo, dt)
-        const b = stepCursor(s, ptr, P, hi, dt)
+        const a = stepCursor(s, ptr, still, P, lo, dt)
+        const b = stepCursor(s, ptr, still, P, hi, dt)
         const speed = Math.hypot(vx, vy)
         expect(Math.hypot(a.vx, a.vy)).toBeLessThanOrEqual(Math.min(speed, P.cursorMaxSpeed) + 1e-9)
         expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(Math.hypot(a.vx, a.vy) + 1e-9)
@@ -82,20 +83,37 @@ describe('cursor step', () => {
   })
 
   it('an absent pointer stops the cursor in place', () => {
-    const next = stepCursor({ x: 3, y: 4, vx: 5, vy: 6 }, { kind: 'absent' }, P, 7, dt)
+    const next = stepCursor({ x: 3, y: 4, vx: 5, vy: 6 }, { kind: 'absent' }, still, P, 7, dt)
     expect(next).toEqual({ x: 3, y: 4, vx: 0, vy: 0 })
   })
 
   it('respects the speed cap', () => {
     fc.assert(
       fc.property(vel, vel, fc.double({ min: -100, max: 100, noNaN: true }), (vx, vy, px) => {
-        const n = stepCursor({ x: 0, y: 0, vx, vy }, { kind: 'present', x: px, y: -px }, P, 0, dt)
+        const n = stepCursor({ x: 0, y: 0, vx, vy }, { kind: 'present', x: px, y: -px }, still, P, 0, dt)
         expect(Math.hypot(n.vx, n.vy)).toBeLessThanOrEqual(P.cursorMaxSpeed + 1e-9)
       }),
     )
   })
 
+  it('free space: a stiff pointer spring tracks a moving pointer with no steady lag; density drag is the lag', () => {
+    const lagAfter = (rho: number, speed: number): number => {
+      let c = { x: 0, y: 0, vx: 0, vy: 0 }
+      let t = 0
+      for (let i = 0; i < 120; i++) {
+        t += dt
+        c = stepCursor(c, { kind: 'present', x: speed * t, y: 0 }, { x: speed, y: 0 }, P, rho, dt)
+      }
+      return speed * t - c.x
+    }
+    expect(lagAfter(0, 60)).toBeLessThan(0.01)
+    expect(lagAfter(0, 60)).toBeGreaterThan(-1e-9)
+    // Steady drag lag is k_r rho v / k_p.
+    expect(lagAfter(4, 30)).toBeCloseTo((P.k_r * 4 * 30) / P.k_p, 1)
+    expect(lagAfter(4, 30)).toBeGreaterThan(lagAfter(1, 30))
+  })
+
   it('takes no wind input: the signature has no wind parameter (structural independence)', () => {
-    expect(stepCursor.length).toBe(5)
+    expect(stepCursor.length).toBe(6)
   })
 })

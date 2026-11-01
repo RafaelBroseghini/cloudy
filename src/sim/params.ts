@@ -9,7 +9,7 @@ export interface ParamSpec {
 
 export const PARAM_SPECS = {
   /** Cursor drag per unit density: F_drag = -k_r * rho * v. */
-  k_r: { min: 0, max: 400, default: 80 },
+  k_r: { min: 0, max: 400, default: 120 },
   /** Spring stiffness (force per unit stretch). Converted to a Box2D joint hertz per spring. */
   k_s: { min: 5, max: 400, default: 90 },
   /** Spring damping along the spring axis. Converted to a Box2D damping ratio per spring. */
@@ -19,7 +19,13 @@ export const PARAM_SPECS = {
   /** Fraction of the excess stretch absorbed into the rest length per step once past yield. */
   creep: { min: 0, max: 0.5, default: 0.02 },
   /** Strain beyond which a spring breaks. */
-  splitStrain: { min: 0.3, max: 6, default: 0.65 },
+  splitStrain: { min: 0.3, max: 6, default: 0.9 },
+  /** Cursor speed per spring rest length (1/s) above which it starts tearing springs near it at a reduced split strain; full effect at twice this. */
+  flickRate: { min: 5, max: 300, default: 16 },
+  /** Split strain multiplier for springs touched by a cursor at full flick speed. */
+  flickCut: { min: 0.05, max: 1, default: 0.15 },
+  /** Smallest piece a split may shed, as a fraction of its cloud (never under 3 blobs); smaller pieces stay attached. */
+  minPieceFrac: { min: 0, max: 0.5, default: 0.15 },
   /** Surface gap (units) under which two armed clouds merge. Ranges are disjoint from d_release so d_touch < d_release always. */
   d_touch: { min: 0, max: 0.4, default: 0.1 },
   /** Surface gap beyond which a split pair arms. */
@@ -29,15 +35,19 @@ export const PARAM_SPECS = {
   /** Shape matching: fraction of the goal error removed per step (velocity nudge alpha*(g-p)/dt). */
   alpha: { min: 0, max: 0.5, default: 0.06 },
   /** Linear damping on blobs (1/s). */
-  blobDamping: { min: 0, max: 10, default: 1.2 },
+  blobDamping: { min: 0, max: 10, default: 2.5 },
+  /** Soft containment stiffness (1/s^2) pulling blobs that leave the visible rect back in; damped critically. 0 disables. */
+  containK: { min: 0, max: 100, default: 25 },
+  /** Blob speed (units/s) above which the excess decays quickly, so flicked pieces do not fly across the view. 1000 disables. */
+  softSpeed: { min: 2, max: 1000, default: 3 },
   /** Cursor mass. */
   m_c: { min: 0.1, max: 10, default: 1 },
   /** Stiffness of the cursor's spring toward the pointer. */
-  k_p: { min: 10, max: 2000, default: 220 },
-  /** Damping of the cursor's spring toward the pointer. */
-  c_p: { min: 0, max: 200, default: 24 },
-  /** Cursor speed cap (units/s). Keeps per-step travel below cursor + blob radius so it cannot tunnel. */
-  cursorMaxSpeed: { min: 1, max: 40, default: 28 },
+  k_p: { min: 10, max: 20000, default: 4000 },
+  /** Damping of the cursor's spring, acting on velocity relative to the pointer (no steady lag in free space). */
+  c_p: { min: 0, max: 1000, default: 120 },
+  /** Cursor speed cap (units/s), a safety net only: 180 is the most the world-step slicing (10 slices of 0.3 units) can sweep without skipping blobs. */
+  cursorMaxSpeed: { min: 1, max: 400, default: 180 },
 } as const satisfies Record<string, ParamSpec>
 
 export type ParamKey = keyof typeof PARAM_SPECS

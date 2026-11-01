@@ -19,17 +19,24 @@ export interface CursorParams {
 }
 
 /**
- * Semi-implicit step. Every velocity-proportional term (pointer damping and density drag) is treated implicitly,
- * so a large k_r * rho slows the cursor but can never flip the sign of its velocity.
+ * Backward-Euler step of m a = k_p (ptr - x) + c_p (v_ptr - v) - k_r rho v. The damper acts on the velocity relative to the
+ * pointer, so in free space (rho = 0) the cursor settles onto a moving pointer with no steady lag; the only lag left is
+ * k_r rho v / k_p, i.e. the density drag. The spring term is implicit too, so a very stiff k_p stays stable at 60 Hz and a
+ * large k_r * rho slows the cursor without flipping the sign of its velocity.
  */
-export function stepCursor(s: CursorState, ptr: Pointer, p: CursorParams, rho: number, dt: number): CursorState {
+export function stepCursor(
+  s: CursorState,
+  ptr: Pointer,
+  ptrVel: { readonly x: number; readonly y: number },
+  p: CursorParams,
+  rho: number,
+  dt: number,
+): CursorState {
   if (ptr.kind === 'absent') return { x: s.x, y: s.y, vx: 0, vy: 0 }
-  const ax = (p.k_p * (ptr.x - s.x)) / p.m_c
-  const ay = (p.k_p * (ptr.y - s.y)) / p.m_c
-  const damp = (p.c_p + p.k_r * rho) / p.m_c
-  const inv = 1 / (1 + dt * damp)
-  let vx = (s.vx + dt * ax) * inv
-  let vy = (s.vy + dt * ay) * inv
+  const m = p.m_c
+  const denom = m / dt + p.k_p * dt + p.c_p + p.k_r * rho
+  let vx = ((m / dt) * s.vx + p.k_p * (ptr.x - s.x) + p.c_p * ptrVel.x) / denom
+  let vy = ((m / dt) * s.vy + p.k_p * (ptr.y - s.y) + p.c_p * ptrVel.y) / denom
   const sp = Math.hypot(vx, vy)
   if (sp > p.cursorMaxSpeed) {
     const f = p.cursorMaxSpeed / sp

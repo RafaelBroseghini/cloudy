@@ -53,6 +53,8 @@ export interface Sim {
   /** Density rho(x, y) of the current blobs. */
   densityAt(x: number, y: number): number
   loadScene(scene: SceneName | SceneSpec, viewW: number, viewH: number): void
+  /** Visible world size (view height is 10 units; width is 10 * aspect). Call on resize; loadScene also sets it. */
+  setBounds(viewW: number, viewH: number): void
   setParams(partial: Partial<Params>): void
   getParams(): Params
   inspect(): SimInspect
@@ -62,14 +64,35 @@ export interface Sim {
 }
 
 const SUBSTEPS = 4
+/** Largest distance the cursor may move inside one Box2D step (about half a blob radius). */
+const MAX_CURSOR_TRAVEL = 0.3
+const MAX_SLICES = 10
+/** Blob centres this far inside the visible rect are free; beyond that the containment force starts. */
+const CONTAIN_MARGIN = 0.6
 const CAT_BLOB = 1
 const CAT_CURSOR = 2
 export const CURSOR_RADIUS = 0.4
 const MAX_BLOB_RADIUS = 0.7
+const MIN_BLOB_RADIUS = 0.2
+/** Time constant (s) over which blob speed above softSpeed decays. */
+const OVERSPEED_TAU = 0.06
+/** A split never sheds fewer blobs than this, however small the cloud. */
+const MIN_PIECE_FLOOR = 4
+/** Extra reach (beyond the cursor radius) within which a fast cursor weakens a spring. */
+const CUT_REACH = 0.5
 /** Merge springs added per merge, nearest first. */
 const MAX_MERGE_SPRINGS = 6
 /** Rest-length floor so near-coincident blobs cannot produce huge strains. */
 const MIN_REST = 0.2
+
+/** Distance from point (x, y) to the segment (ax, ay)-(bx, by). */
+function segmentDistance(x: number, y: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const len2 = dx * dx + dy * dy
+  const u = len2 > 0 ? Math.min(1, Math.max(0, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0
+  return Math.hypot(x - (ax + u * dx), y - (ay + u * dy))
+}
 
 interface Spring {
   a: number
@@ -132,11 +155,17 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   let clouds = new Map<number, number[]>()
   const boxes = new Map<number, Box>()
 
+  let halfW = 5
+  let halfH = 5
+
   let pointer: Pointer = { kind: 'absent' }
   let cursor: CursorState = { x: 0, y: 0, vx: 0, vy: 0 }
   let cursorPresent = false
   let densityAtCursor = 0
   const hits: number[] = []
+  // Pointer velocity by finite difference, fed to the cursor's damper. Zero on the first present step.
+  let prevPointer: { x: number; y: number } | null = null
+  const ptrVel = { x: 0, y: 0 }
 
   // ---- Box2D plumbing -------------------------------------------------------------------------------
 
@@ -154,6 +183,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     wd.gravity.y = 0
     wd.enableSleep = false
     wd.workerCount = 0
+
     world = b2.b2CreateWorld(wd)
     wd.delete()
 
@@ -300,16 +330,35 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   // ---- Springs, topology ----------------------------------------------------------------------------
 
   function updateSprings(): void {
+    // Springs past splitStrain are only candidates: breaking them must not shed a wisp (see sparedLinks).
+    let broken: Set<Spring> | null = null
+    // A fast cursor tears springs it touches at a lower strain, so a flick cuts cleanly along its path while a slow
+    // sweep, which never reaches flickRate, leaves the strain rule alone.
+    const speed = cursorPresent ? Math.hypot(cursor.vx, cursor.vy) : 0
+    const reach = CURSOR_RADIUS + CUT_REACH + 0.5 * speed * FIXED_DT
+    for (const s of springs) {
+      const ax = px[s.a] ?? 0
+      const ay = py[s.a] ?? 0
+      const bx = px[s.b] ?? 0
+      const by = py[s.b] ?? 0
+      const d = Math.hypot(ax - bx, ay - by)
+      let limit = params.splitStrain
+      // Speed per rest length, so small (portrait) clouds tear at proportionally lower cursor speeds.
+      const t = Math.min(1, Math.max(0, speed / s.L / params.flickRate - 1))
+      if (t > 0 && segmentDistance(cursor.x, cursor.y, ax, ay, bx, by) < reach) limit *= 1 - t * (1 - params.flickCut)
+      if ((d - s.L) / s.L > limit) (broken ??= new Set()).add(s)
+    }
+    if (broken) for (const s of sparedLinks(broken)) broken.delete(s)
     let w = 0
     for (let r = 0; r < springs.length; r++) {
       const s = springs[r] as Spring
-      const d = Math.hypot((px[s.a] ?? 0) - (px[s.b] ?? 0), (py[s.a] ?? 0) - (py[s.b] ?? 0))
-      const strain = (d - s.L) / s.L
-      if (strain > params.splitStrain) {
+      if (broken?.has(s)) {
         b2.b2DestroyJoint(s.joint)
         dirty = true
         continue
       }
+      const d = Math.hypot((px[s.a] ?? 0) - (px[s.b] ?? 0), (py[s.a] ?? 0) - (py[s.b] ?? 0))
+      const strain = (d - s.L) / s.L
       if (Math.abs(strain) > params.yieldStrain) {
         s.L = Math.max(MIN_REST, s.L + params.creep * (d - s.L))
         b2.b2DistanceJoint_SetRestLength(s.joint, s.L)
@@ -317,6 +366,62 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       springs[w++] = s
     }
     springs.length = w
+  }
+
+  /**
+   * Of the candidate springs, those to keep so that no piece smaller than minPieceFrac of its cloud (at least MIN_PIECE_FLOOR
+   * blobs) is shed; a cloud under twice that never splits. A tiny component keeps its links to the neighbour it shares most
+   * candidates with and reattaches, because those springs stay stretched and pull it back. Tearing off a wisp of a few
+   * blobs reads as shredding, not splitting.
+   */
+  function sparedLinks(candidates: ReadonlySet<Spring>): Spring[] {
+    const spared = new Set<Spring>()
+    const kept: Array<{ readonly a: number; readonly b: number }> = []
+    for (const s of springs) if (!candidates.has(s)) kept.push(s)
+    for (let guard = 0; guard < candidates.size; guard++) {
+      const root = labelComponents(n, kept)
+      const size = new Map<number, number>()
+      const cloudSize = new Map<number, number>()
+      for (let i = 0; i < n; i++) {
+        size.set(root[i] ?? i, (size.get(root[i] ?? i) ?? 0) + 1)
+        cloudSize.set(cloud[i] ?? 0, (cloudSize.get(cloud[i] ?? 0) ?? 0) + 1)
+      }
+      // Smallest tiny component first, ties by root, so the choice is deterministic.
+      let tiny = -1
+      for (const [r, sz] of size) {
+        const whole = cloudSize.get(cloud[r] ?? 0) ?? 0
+        const limit = Math.max(MIN_PIECE_FLOOR, Math.ceil(params.minPieceFrac * whole))
+        if (sz >= limit) continue
+        if (tiny < 0 || sz < (size.get(tiny) ?? 0) || (sz === (size.get(tiny) ?? 0) && r < tiny)) {
+          if ([...candidates].some((c) => !spared.has(c) && (root[c.a] === r) !== (root[c.b] === r))) tiny = r
+        }
+      }
+      if (tiny < 0) break
+      const links = new Map<number, Spring[]>()
+      for (const c of candidates) {
+        if (spared.has(c)) continue
+        const ra = root[c.a] ?? c.a
+        const rb = root[c.b] ?? c.b
+        if ((ra === tiny) === (rb === tiny)) continue
+        const other = ra === tiny ? rb : ra
+        const list = links.get(other)
+        if (list) list.push(c)
+        else links.set(other, [c])
+      }
+      let best: Spring[] = []
+      let bestRoot = -1
+      for (const [r, list] of links) {
+        if (list.length > best.length || (list.length === best.length && r < bestRoot)) {
+          best = list
+          bestRoot = r
+        }
+      }
+      for (const c of best) {
+        spared.add(c)
+        kept.push(c)
+      }
+    }
+    return [...spared]
   }
 
   function relabel(): void {
@@ -440,13 +545,73 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
 
   // ---- Public ---------------------------------------------------------------------------------------
 
+  /**
+   * Soft containment: a blob centre beyond the visible rect (inset by CONTAIN_MARGIN) feels a critically damped spring
+   * back toward it (damping acts only while outside, so it arrives at the edge slowly instead of coasting across the
+   * view). Strays drift home instead of bouncing off a wall. Blobs only; never the cursor.
+   */
+  function contain(): void {
+    const k = params.containK
+    const c = 2 * Math.sqrt(k)
+    const lx = halfW - CONTAIN_MARGIN
+    const ly = halfH - CONTAIN_MARGIN
+    for (let i = 0; i < n; i++) {
+      const x = px[i] ?? 0
+      const y = py[i] ?? 0
+      const ex = x > lx ? x - lx : x < -lx ? x + lx : 0
+      const ey = y > ly ? y - ly : y < -ly ? y + ly : 0
+      if (ex !== 0) dvx[i] = (dvx[i] ?? 0) - FIXED_DT * (k * ex + c * (vx[i] ?? 0))
+      if (ey !== 0) dvy[i] = (dvy[i] ?? 0) - FIXED_DT * (k * ey + c * (vy[i] ?? 0))
+    }
+  }
+
+  /**
+   * Blobs thrown faster than softSpeed shed the excess with time constant OVERSPEED_TAU, so a flicked piece slows
+   * within a fraction of a second instead of sailing to the edge and piling onto its neighbours. Contact still hands
+   * a blob the cursor's speed each step, so a cursor pushes at full strength; this acts once it lets go.
+   */
+  function bleedOverspeed(): void {
+    const keep = Math.exp(-FIXED_DT / OVERSPEED_TAU)
+    for (let i = 0; i < n; i++) {
+      const sp = Math.hypot(vx[i] ?? 0, vy[i] ?? 0)
+      if (sp <= params.softSpeed) continue
+      const f = (params.softSpeed + (sp - params.softSpeed) * keep) / sp - 1
+      dvx[i] = (dvx[i] ?? 0) + f * (vx[i] ?? 0)
+      dvy[i] = (dvy[i] ?? 0) + f * (vy[i] ?? 0)
+    }
+  }
+
+  function setBounds(viewW: number, viewH: number): void {
+    if (Number.isFinite(viewW) && viewW > 0) halfW = viewW / 2
+    if (Number.isFinite(viewH) && viewH > 0) halfH = viewH / 2
+  }
+
+  function pointerVel(): { readonly x: number; readonly y: number } {
+    ptrVel.x = 0
+    ptrVel.y = 0
+    if (pointer.kind === 'present') {
+      if (prevPointer) {
+        ptrVel.x = (pointer.x - prevPointer.x) / FIXED_DT
+        ptrVel.y = (pointer.y - prevPointer.y) / FIXED_DT
+        const sp = Math.hypot(ptrVel.x, ptrVel.y)
+        if (sp > params.cursorMaxSpeed) {
+          ptrVel.x *= params.cursorMaxSpeed / sp
+          ptrVel.y *= params.cursorMaxSpeed / sp
+        }
+      }
+      prevPointer = { x: pointer.x, y: pointer.y }
+    } else prevPointer = null
+    return ptrVel
+  }
+
   function stepOnce(): void {
     if (!world || !cursorBody) return
     syncCursorPresence()
+    if (!cursorPresent) prevPointer = null
 
     if (cursorPresent) {
       densityAtCursor = density(cursor.x, cursor.y)
-      cursor = stepCursor(cursor, pointer, params, densityAtCursor, FIXED_DT)
+      cursor = stepCursor(cursor, pointer, pointerVel(), params, densityAtCursor, FIXED_DT)
       // Drive the kinematic body by velocity so contacts push blobs; Box2D moves it by v dt during the step.
       vec.x = cursor.vx
       vec.y = cursor.vy
@@ -464,6 +629,8 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
         dvy[i] = (dvy[i] ?? 0) + w.y * FIXED_DT
       }
     }
+    if (params.containK > 0) contain()
+    if (params.softSpeed < 1000) bleedOverspeed()
     for (let i = 0; i < n; i++) {
       const ax = dvx[i] ?? 0
       const ay = dvy[i] ?? 0
@@ -473,7 +640,12 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       b2.b2Body_SetLinearVelocity(bodies[i] as b2BodyId, vec)
     }
 
-    b2.b2World_Step(world, FIXED_DT, SUBSTEPS)
+    // A fast cursor would hop over blobs between contact updates, so split the world step into slices that each move
+    // it less than MAX_CURSOR_TRAVEL. Only fast frames pay for extra slices.
+    const slices = cursorPresent
+      ? Math.min(MAX_SLICES, Math.max(1, Math.ceil((Math.hypot(cursor.vx, cursor.vy) * FIXED_DT) / MAX_CURSOR_TRAVEL)))
+      : 1
+    for (let k = 0; k < slices; k++) b2.b2World_Step(world, FIXED_DT / slices, SUBSTEPS)
     refreshCache()
 
     updateSprings()
@@ -485,6 +657,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   }
 
   function loadScene(scene: SceneName | SceneSpec, viewW: number, viewH: number): void {
+    setBounds(viewW, viewH)
     destroyWorld()
     createWorld()
     const spec = typeof scene === 'string' ? sceneSpec(scene, viewW, viewH) : scene
@@ -494,6 +667,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     dirty = false
     gate.clear()
     cursorPresent = false
+    prevPointer = null
     densityAtCursor = 0
     stepper.reset()
     nextCloudId = spec.clouds.length + 1
@@ -502,7 +676,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       py[i] = b.y
       vx[i] = 0
       vy[i] = 0
-      radius[i] = Math.min(MAX_BLOB_RADIUS, Math.max(0.3, b.radius))
+      radius[i] = Math.min(MAX_BLOB_RADIUS, Math.max(MIN_BLOB_RADIUS, b.radius))
       mass[i] = Math.PI * (radius[i] ?? 0) ** 2
       cloud[i] = b.cloud + 1
       addBody(i, b.x, b.y, radius[i] ?? 0)
@@ -586,6 +760,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     },
     densityAt: density,
     loadScene,
+    setBounds,
     setParams,
     getParams: () => ({ ...params }),
     inspect() {
