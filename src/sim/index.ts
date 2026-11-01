@@ -1,4 +1,4 @@
-export { BLOB, BLOB_STRIDE, INFLUENCE_FACTOR, MAX_BLOBS, createBlobBuffer } from './blobBuffer.ts'
+export { BLOB, BLOB_STRIDE, CLOUD_THRESHOLD, DENSITY_REF_RADIUS, INFLUENCE_FACTOR, MAX_BLOBS, createBlobBuffer } from './blobBuffer.ts'
 export { createSim, CURSOR_RADIUS } from './sim.ts'
 export type { Sim, SimInspect, SimOptions, SimSnapshot, Wind } from './sim.ts'
 export type { Pointer, CursorState } from './cursor.ts'

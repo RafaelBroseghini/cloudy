@@ -74,10 +74,18 @@ function makeAb(pass, mode) {
 }
 
 const game = (body) => `(() => { const g = window.__GAME__; ${body} })()`
-const snap = `const s = g.getState(); return JSON.stringify({ clouds: s.clouds, blobs: s.blobs, frame: s.frame, backend: s.backend })`
+// `sig` fingerprints where the clouds are (rounded centres), so passes can be compared for identical play.
+const snap = `const s = g.getState(); const sig = g.cloudCentres().map((c) => c.id + ":" + c.blobs + ":" + c.x.toFixed(2) + ":" + c.y.toFixed(2)).join(" ");
+  return JSON.stringify({ clouds: s.clouds, blobs: s.blobs, frame: s.frame, backend: s.backend, sig })`
 
 const STEPS = {
-  load: game(`g.pause(true); g.loadScene("m1"); g.tick(1000); ${snap}`),
+  // The webgpu pass is headed on the real desktop and tick falls back to real input unless overridden, so take the pointer
+  // away from the real mouse before anything steps; loadScene resets the cursor too.
+  load: game(`g.pause(true); g.pointerAbsent(); g.loadScene("m1"); g.tick(1000); ${snap}`),
+  // Every cloud centre must sit in dense enough field to render solid (density >= the shared edge threshold).
+  density: game(`
+    const k = g.constants();
+    return JSON.stringify({ threshold: k.cloudThreshold, centres: g.cloudCentres().map((c) => ({ id: c.id, rho: g.densityAt(c.x, c.y) })) })`),
   // A fast drag straight through the middle of the biggest cloud tears it; if that misses, once more across it.
   split: game(`
     const before = g.getState().clouds;
@@ -114,6 +122,13 @@ const STEPS = {
     ${snap}`),
   empty: game(`g.loadScene("empty"); g.tick(500); ${snap}`),
   state: game(snap),
+  // Real mouse path: the harness override is released, so tick reads pointer.ts / clientToWorld. Called after a real move.
+  realInput: game(`
+    g.pointerRelease(); g.tick(100);
+    const s = g.getState();
+    const out = JSON.stringify({ cursor: s.cursor, view: s.view });
+    g.pointerAbsent();
+    return out`),
 }
 
 // The GPU behind the page. Chrome hides WebGPU adapter info and requestAdapter can stall a busy software-rendered page,
@@ -125,7 +140,8 @@ const ADAPTER = `(() => {
 async function runPass(pass, report) {
   const mode = pass.name === "webgpu" ? WEBGPU_MODE : "-"
   const failures = []
-  const row = { pass: pass.name, backend: "-", adapter: "-", ok: false, note: "", trail: "" }
+  const seq = []
+  const row = { pass: pass.name, backend: "-", adapter: "-", ok: false, note: "", trail: "", core: NaN, seq }
   report.push(row)
   if (pass.name === "webgpu" && mode === "skip") {
     row.ok = true
@@ -170,9 +186,15 @@ async function runPass(pass, report) {
 
     const loaded = ab.json(STEPS.load)
     const trail = [`load ${loaded.clouds}`]
-    const step = (name, v) => (trail.push(`${name} ${v.clouds}`), (row.trail = trail.join(", ")), v)
+    const step = (name, v) => (trail.push(`${name} ${v.clouds}`), (row.trail = trail.join(", ")), seq.push([name, v.clouds, v.sig]), v)
     expect(loaded.clouds >= 1, `m1 loaded ${loaded.clouds} clouds`)
     expect(loaded.blobs > 0, `m1 loaded ${loaded.blobs} blobs`)
+    const dens = ab.json(STEPS.density)
+    row.core = Math.min(...dens.centres.map((c) => c.rho))
+    for (const c of dens.centres) {
+      expect(c.rho >= dens.threshold, `cloud ${c.id} centre density ${c.rho.toFixed(3)} is below the render threshold ${dens.threshold}: it would draw faint`)
+    }
+    seq.push(["load", loaded.clouds, loaded.sig])
     await sleep(300) // a frame or two of the loaded scene
     shot("initial")
     if (pass.smoke) return
@@ -193,6 +215,15 @@ async function runPass(pass, report) {
     const empty = step("empty", ab.json(STEPS.empty))
     expect(empty.clouds === 0, `the empty scene has ${empty.clouds} clouds`)
     expect(empty.blobs === 0, `the empty scene has ${empty.blobs} blobs`)
+
+    // Real mouse through pointer.ts: move the browser's own pointer to a known pixel, no override.
+    const px = Math.round(pass.w / 2), py = Math.round(pass.h / 8)
+    ab.run("mouse", "move", String(px), String(py))
+    const real = ab.json(STEPS.realInput)
+    const wx = (px / pass.w - 0.5) * real.view.width, wy = (0.5 - py / pass.h) * real.view.height
+    expect(real.cursor.present, `a real mouse move to ${px},${py} left the cursor absent`)
+    expect(Math.hypot(real.cursor.x - wx, real.cursor.y - wy) < 0.3, `real mouse at ${px},${py} should put the cursor near (${wx.toFixed(2)}, ${wy.toFixed(2)}), got (${real.cursor.x.toFixed(2)}, ${real.cursor.y.toFixed(2)})`)
+
     await sleep(500)
     const later = ab.json(STEPS.state)
     expect(later.frame > empty.frame, `the render loop stopped: frame ${empty.frame} -> ${later.frame}`)
@@ -279,6 +310,25 @@ try {
   stopPreview()
 }
 
+// WebGPU and WebGL2 must play the identical game: same cloud counts and the same cloud positions at every step.
+const gpu = report.find((r) => r.pass === "webgpu" && r.ok && r.seq.length > 0)
+const gl = report.find((r) => r.pass === "webgl2" && r.ok && r.seq.length > 0)
+let equivalence = "skipped (needs both the webgpu and webgl2 passes)"
+if (gpu && gl) {
+  const diffs = []
+  for (let i = 0; i < Math.max(gpu.seq.length, gl.seq.length); i++) {
+    const a = JSON.stringify(gpu.seq[i]), b = JSON.stringify(gl.seq[i])
+    if (a !== b) diffs.push(`step ${i}: webgpu ${a} vs webgl2 ${b}`)
+  }
+  if (diffs.length) {
+    equivalence = "FAIL"
+    gpu.ok = false
+    gl.ok = false
+    gpu.note = `backend divergence:\n${diffs.join("\n")}\n${gpu.note}`
+    gl.note = gpu.note
+  } else equivalence = `identical across ${gpu.seq.length} steps`
+}
+console.log(`backend equivalence: ${equivalence}`)
 const pad = (s, n) => String(s).padEnd(n)
 console.log(`\n${pad("pass", 8)}${pad("backend", 9)}${pad("result", 22)}adapter`)
 for (const r of report) {
@@ -286,6 +336,9 @@ for (const r of report) {
   console.log(`${pad(r.pass, 8)}${pad(r.backend, 9)}${pad(r.ok ? `ok${first ? ` (${first})` : ""}` : "FAIL", 22)}${r.adapter}`)
 }
 for (const r of report) if (r.trail) console.log(`${r.pass}: clouds ${r.trail}`)
+for (const r of report) if (Number.isFinite(r.core)) console.log(`${r.pass}: min cloud-core density ${r.core.toFixed(2)}`)
+
+if (process.env.VERIFY_SEQ) for (const r of report) console.log(`${r.pass} seq: ${JSON.stringify(r.seq)}`)
 const failed = report.filter((r) => !r.ok)
 for (const r of failed) console.error(`\n${r.pass}: ${r.note}`)
 if (fatal) console.error(`\nverify failed: ${fatal}`)

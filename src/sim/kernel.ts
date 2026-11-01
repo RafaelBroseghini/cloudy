@@ -1,6 +1,6 @@
 // Density kernel and cursor drag. Pure functions, no wasm.
 
-import { INFLUENCE_FACTOR } from './blobBuffer.ts'
+import { DENSITY_REF_RADIUS, INFLUENCE_FACTOR } from './blobBuffer.ts'
 
 export function influenceRadius(colliderRadius: number): number {
   return INFLUENCE_FACTOR * colliderRadius
@@ -13,9 +13,9 @@ export function kernelW(q: number): number {
   return t * t * t
 }
 
-/** One blob's contribution m * W(d / R) at distance d. */
+/** One blob's contribution m * (DENSITY_REF_RADIUS / r)^2 * W(d / R) at distance d, so density is invariant to layout scale. */
 export function blobDensity(mass: number, dist: number, colliderRadius: number): number {
-  return mass * kernelW(dist / influenceRadius(colliderRadius))
+  return mass * (DENSITY_REF_RADIUS / colliderRadius) ** 2 * kernelW(dist / influenceRadius(colliderRadius))
 }
 
 /** Drag force on the cursor: -k_r * rho * v. Non-decreasing in rho, zero at rho = 0, opposes v. */

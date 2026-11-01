@@ -667,7 +667,10 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     dirty = false
     gate.clear()
     cursorPresent = false
+    cursor = { x: 0, y: 0, vx: 0, vy: 0 }
     prevPointer = null
+    ptrVel.x = 0
+    ptrVel.y = 0
     densityAtCursor = 0
     stepper.reset()
     nextCloudId = spec.clouds.length + 1

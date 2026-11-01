@@ -24,7 +24,7 @@ export const PARAM_SPECS = {
   flickRate: { min: 5, max: 300, default: 16 },
   /** Split strain multiplier for springs touched by a cursor at full flick speed. */
   flickCut: { min: 0.05, max: 1, default: 0.15 },
-  /** Smallest piece a split may shed, as a fraction of its cloud (never under 3 blobs); smaller pieces stay attached. */
+  /** Smallest piece a split may shed, as a fraction of its cloud (never under MIN_PIECE_FLOOR = 4 blobs, in sim.ts); smaller pieces stay attached. */
   minPieceFrac: { min: 0, max: 0.5, default: 0.15 },
   /** Surface gap (units) under which two armed clouds merge. Ranges are disjoint from d_release so d_touch < d_release always. */
   d_touch: { min: 0, max: 0.4, default: 0.1 },

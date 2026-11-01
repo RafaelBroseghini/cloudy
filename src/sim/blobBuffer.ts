@@ -13,6 +13,16 @@ export const MAX_BLOBS = 256
  */
 export const INFLUENCE_FACTOR = 2.2
 
+/**
+ * A blob contributes mass * (DENSITY_REF_RADIUS / radius)^2 * W(q). Mass is area (pi r^2), so without the factor density
+ * would fall with the square of a cloud's layout scale and phone-sized clouds would render pale. With it, a cloud's core
+ * density depends on its blob overlap only, not its size. Equal to the mean authored radius, so scale-1 clouds are unchanged.
+ */
+export const DENSITY_REF_RADIUS = 0.5
+
+/** Density at which a cloud's edge sits (coverage ~50%). The renderer shades around it; cloud cores must exceed it. */
+export const CLOUD_THRESHOLD = 0.42
+
 /** Field offsets inside one blob record. */
 export const BLOB = {
   x: 0,

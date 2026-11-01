@@ -1,8 +1,8 @@
 import fc from 'fast-check'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { BLOB, BLOB_STRIDE, MAX_BLOBS, createBlobBuffer } from './blobBuffer.ts'
+import { BLOB, BLOB_STRIDE, CLOUD_THRESHOLD, MAX_BLOBS, createBlobBuffer } from './blobBuffer.ts'
 import { createSim, type Sim, type Wind } from './index.ts'
-import type { SceneSpec } from './scene.ts'
+import { sceneSpec, type SceneSpec } from './scene.ts'
 import { labelComponents } from './topology.ts'
 
 const W = 17.8
@@ -485,5 +485,18 @@ describe('perf', () => {
     const median = times[150] as number
     console.info(`step() median ${median.toFixed(3)} ms, p95 ${(times[285] as number).toFixed(3)} ms, springs ${sim.snapshot().springs}`)
     expect(median).toBeLessThan(2)
+  })
+})
+
+describe('m1 core density is independent of layout scale', () => {
+  it.each([[16, 10], [17.8, 10], [390 / 84.4, 10], [4.62, 10]] as const)('view %f x %f: cores stay above the render threshold', async (w, h) => {
+    const sim = await createSim()
+    sims.push(sim)
+    sim.loadScene('m1', w, h)
+    const cores = sceneSpec('m1', w, h).clouds.map((c) => sim.densityAt(c.x, c.y))
+    for (const rho of cores) {
+      expect(rho).toBeGreaterThanOrEqual(CLOUD_THRESHOLD * 1.5)
+      expect(rho).toBeLessThan(3)
+    }
   })
 })

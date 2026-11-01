@@ -43,6 +43,10 @@ export interface GameHarnessApi {
   getParams(): Params;
   setParams(partial: Partial<Params>): void;
   cloudCentres(): CloudCentre[];
+  /** Sim density at a world point (what the renderer draws as cloud). */
+  densityAt(x: number, y: number): number;
+  /** Shared density constants: the edge threshold the renderer shades around, and the blob influence factor. */
+  constants(): { cloudThreshold: number; influenceFactor: number };
 }
 
 declare global {

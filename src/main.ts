@@ -8,7 +8,7 @@ import {
   parseBackendParam,
   type GameHarnessApi,
 } from "./harness.ts";
-import { createBlobBuffer, createSim, FIXED_DT, type Pointer, type SceneName } from "./sim/index.ts";
+import { CLOUD_THRESHOLD, createBlobBuffer, createSim, INFLUENCE_FACTOR, FIXED_DT, type Pointer, type SceneName } from "./sim/index.ts";
 
 /** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
 const RENDER_INTERVAL_MS = 1000 / 60;
@@ -117,6 +117,8 @@ async function main(): Promise<void> {
     cloudCentres() {
       return cloudCentresFromBuffer(blobs, sim.writeBlobs(blobs));
     },
+    densityAt: (x, y) => sim.densityAt(x, y),
+    constants: () => ({ cloudThreshold: CLOUD_THRESHOLD, influenceFactor: INFLUENCE_FACTOR }),
   };
   installHarness(harness);
 

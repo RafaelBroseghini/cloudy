@@ -23,6 +23,7 @@ import {
   attribute,
   clamp,
   dot,
+  float,
   Fn,
   max,
   mix,
@@ -34,7 +35,7 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { BLOB_STRIDE, INFLUENCE_FACTOR, MAX_BLOBS } from "../sim/blobBuffer.ts";
+import { BLOB_STRIDE, CLOUD_THRESHOLD, DENSITY_REF_RADIUS, INFLUENCE_FACTOR, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { VIEW_HEIGHT } from "./view.ts";
 
 
@@ -66,8 +67,9 @@ export function createSplatPass() {
   material.positionNode = vec3(blobA.xy.add(corner.mul(reach)), 0);
   const q2 = dot(corner, corner);
   const falloff = max(q2.oneMinus(), 0);
-  // W(q) = (1 - q^2)^3, scaled by mass; dead slots (alive = 0) add nothing.
-  material.fragmentNode = vec4(falloff.mul(falloff).mul(falloff).mul(blobA.w).mul(blobB.w), 0, 0, 1);
+  // W(q) = (1 - q^2)^3, scaled by mass * (DENSITY_REF_RADIUS / radius)^2 like blobDensity; dead slots (alive = 0) add nothing.
+  const weight = blobA.w.mul(float(DENSITY_REF_RADIUS).div(blobA.z).pow(2));
+  material.fragmentNode = vec4(falloff.mul(falloff).mul(falloff).mul(weight).mul(blobB.w), 0, 0, 1);
   material.blending = AdditiveBlending;
   material.transparent = true;
   material.depthTest = false;
@@ -113,7 +115,7 @@ export function createFieldTarget(): RenderTarget {
 export function createCloudLook() {
   return {
     /** Density at which the cloud edge sits, and half-width of the soft edge. */
-    threshold: uniform(0.42),
+    threshold: uniform(CLOUD_THRESHOLD),
     softness: uniform(0.22),
     /** Edge erosion strength (multiplicative on density) and noise scale in world units^-1. */
     erosion: uniform(0.4),

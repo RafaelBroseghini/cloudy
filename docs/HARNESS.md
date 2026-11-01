@@ -10,6 +10,7 @@ Installed always (dev and preview). World units: y up, origin at screen centre, 
 - `loadScene("m1" | "empty")`: reset the sim to a named scene sized to the current view.
 - `getParams()` / `setParams(partial)`: read / write sim params (clamped; see `src/sim/params.ts`).
 - `cloudCentres()`: `[{ id, x, y, blobs }]`, mass-weighted centre per cloud, to aim a drag.
+- `densityAt(x, y)`: the sim's density at a world point. `constants()`: `{ cloudThreshold, influenceFactor }`, the shared values from `src/sim/blobBuffer.ts`; cloud cores must have `densityAt >= cloudThreshold` or they render faint.
 
 Force a split, then a merge (`tau` is the merge cooldown, 1.5 s by default):
 
