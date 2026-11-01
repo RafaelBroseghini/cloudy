@@ -19,12 +19,13 @@ export PATH=~/.local/share/fnm/node-versions/v24.18.1/installation/bin:$PATH
 | `npm run lint` | oxlint |
 | `npm test` | Vitest + fast-check, node, `src/**/*.test.ts` |
 | `npm run build` | typecheck + `vite build` |
+| `npm run verify` | Build, then drive the game in a real browser on WebGPU, forced WebGL2 and a phone viewport; screenshots in `artifacts/verify/` |
 
 ## Before you finish
 
 - Never assume it works because you wrote it. Run it.
 - Run `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`.
-- Anything that renders or runs in the browser: use the verify skill (`.agents/skills/verify`) and read the screenshots. A pass is not a look.
+- Anything that renders or runs in the browser: run `npm run verify` (skill: `.agents/skills/verify`) and read the screenshots. A pass is not a look.
 - Commit messages are conventional: `feat(scope):`, `fix(scope):`, `test:`, `docs:`, `chore:`.
 
 ## Architecture rules

@@ -1,0 +1,293 @@
+// End-to-end check of the built game in a real browser. Drives window.__GAME__ through a split and a merge on each
+// backend, screenshots the result and exits non-zero on any failed assert, page error or console error.
+//
+//   npm run verify                       every pass
+//   VERIFY_ONLY=webgl2 npm run verify    one pass: webgpu | webgl2 | mobile
+//   VERIFY_WEBGPU=gpu|swiftshader|skip   override how the webgpu pass gets its adapter (default: gpu if $DISPLAY is set)
+//   VERIFY_PORT=43210                    port for the preview server
+import { execFileSync, spawn } from "node:child_process"
+import { mkdirSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url))
+const PORT = process.env.VERIFY_PORT ?? "43210"
+const APP = `http://127.0.0.1:${PORT}/`
+const OUT = join(ROOT, "artifacts", "verify")
+const ONLY = process.env.VERIFY_ONLY
+const WEBGPU_MODE = process.env.VERIFY_WEBGPU ?? (process.env.DISPLAY ? "gpu" : "swiftshader")
+const READY_TIMEOUT_MS = 60_000
+
+// Console errors that are not our bug. Anything else at [error] level fails the pass.
+const HARMLESS_ERRORS = [
+  { re: /favicon\.ico/, why: "the page ships no favicon" },
+]
+// Warnings are only printed, never failing, except these which mean the wrong backend ran.
+const WEBGPU_UNAVAILABLE = /WebGPU is not available/
+
+const PASSES = [
+  { name: "webgpu", w: 1280, h: 800, query: "", expect: "webgpu" },
+  { name: "webgl2", w: 1280, h: 800, query: "?backend=webgl", expect: "webgl2" },
+  { name: "mobile", w: 390, h: 844, query: "?backend=webgl", expect: "webgl2", smoke: true },
+].filter((p) => !ONLY || p.name === ONLY)
+if (ONLY && PASSES.length === 0) throw new Error(`VERIFY_ONLY=${ONLY}: expected webgpu, webgl2 or mobile`)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// Each pass is its own agent-browser session (its own daemon), because browser args and --webgpu are fixed at daemon
+// start and forced WebGL2 needs a session that never asked for WebGPU.
+function makeAb(pass, mode) {
+  const env = { ...process.env, AGENT_BROWSER_SESSION: `verify-${pass.name}` }
+  delete env.AGENT_BROWSER_ARGS
+  delete env.AGENT_BROWSER_WEBGPU
+  const flags = []
+  // `set viewport` only emulates a size; the compositor still draws no more than the real window, and the real window has
+  // its own chrome and a minimum width. Open it bigger than the viewport so the emulated size is the one on screen.
+  const args = [`--window-size=${Math.max(pass.w, 600)},${pass.h + 200}`]
+  if (pass.name === "webgpu" && mode === "gpu") {
+    flags.push("--headed")
+    args.push("--enable-unsafe-webgpu", "--use-webgpu-adapter=opengles")
+  } else if (pass.name === "webgpu") {
+    flags.push("--webgpu")
+  }
+  env.AGENT_BROWSER_ARGS = args.join("\n")
+  const run = (...args) =>
+    execFileSync("npx", ["agent-browser", ...args], { cwd: ROOT, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 })
+  return {
+    run,
+    open: (url) => run(...flags, "open", url),
+    // Evaluate an expression that returns a JSON string; give back the parsed value.
+    json(expr) {
+      const out = run("eval", expr).trim()
+      let v = JSON.parse(out)
+      if (typeof v === "string") v = JSON.parse(v)
+      return v
+    },
+    close() {
+      try {
+        run("close")
+      } catch {
+        // Not running.
+      }
+    },
+  }
+}
+
+const game = (body) => `(() => { const g = window.__GAME__; ${body} })()`
+const snap = `const s = g.getState(); return JSON.stringify({ clouds: s.clouds, blobs: s.blobs, frame: s.frame, backend: s.backend })`
+
+const STEPS = {
+  load: game(`g.pause(true); g.loadScene("m1"); g.tick(1000); ${snap}`),
+  // A fast drag straight through the middle of the biggest cloud tears it; if that misses, once more across it.
+  split: game(`
+    const before = g.getState().clouds;
+    const view = g.getState().view;
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      if (g.getState().clouds > before) break;
+      const big = g.cloudCentres().sort((a, b) => b.blobs - a.blobs)[0];
+      // Just clear of the cloud's edge (about 0.4 * sqrt(blobs) wide at the default spacing), so only it is torn.
+      const reach = Math.min(1.6 * Math.sqrt(0.16 * big.blobs) + 1, (dx ? view.width : view.height) / 2 + 1);
+      g.pointer(big.x - dx * reach, big.y - dy * reach); g.tick(1500);
+      g.drag(big.x - dx * reach, big.y - dy * reach, big.x + dx * reach, big.y + dy * reach, 0.15);
+    }
+    ${snap}`),
+  persist: game(`g.pointerAbsent(); g.tick(3000); ${snap}`),
+  // Herd the two closest pieces into each other (the lighter one towards the heavier), then let go past tau. A few tries:
+  // where the pieces end up after a split is the sim's business, not this script's.
+  merge: (peak) => game(`
+    const peak = ${peak};
+    for (let k = 0; k < 5 && g.getState().clouds >= peak; k++) {
+      const cs = g.cloudCentres();
+      let best = null;
+      for (const p of cs) for (const q of cs) {
+        if (p.id === q.id || p.blobs < q.blobs) continue;
+        const d = Math.hypot(q.x - p.x, q.y - p.y);
+        if (!best || d < best.d) best = { a: p, b: q, d };
+      }
+      if (!best) break;
+      const { a, b } = best, d = best.d || 1;
+      const sx = b.x + ((b.x - a.x) / d) * 2.5, sy = b.y + ((b.y - a.y) / d) * 2.5;
+      g.pointer(sx, sy); g.tick(800);
+      g.drag(sx, sy, a.x, a.y, 1.5);
+      g.pointerAbsent(); g.tick(2500);
+    }
+    ${snap}`),
+  empty: game(`g.loadScene("empty"); g.tick(500); ${snap}`),
+  state: game(snap),
+}
+
+// The GPU behind the page. Chrome hides WebGPU adapter info and requestAdapter can stall a busy software-rendered page,
+// so this reads the WebGL renderer string, which names the same device.
+const ADAPTER = `(() => {
+  try { const c = document.createElement("canvas").getContext("webgl2"); return JSON.stringify(c.getParameter(c.getExtension("WEBGL_debug_renderer_info").UNMASKED_RENDERER_WEBGL)); } catch { return JSON.stringify("unknown"); }
+})()`
+
+async function runPass(pass, report) {
+  const mode = pass.name === "webgpu" ? WEBGPU_MODE : "-"
+  const failures = []
+  const row = { pass: pass.name, backend: "-", adapter: "-", ok: false, note: "", trail: "" }
+  report.push(row)
+  if (pass.name === "webgpu" && mode === "skip") {
+    row.ok = true
+    row.note = "skipped"
+    return
+  }
+  const fail = (msg) => failures.push(msg)
+  const expect = (cond, msg) => {
+    if (!cond) fail(msg)
+    return cond
+  }
+  const ab = makeAb(pass, mode)
+  const shot = (step) => {
+    const path = join(OUT, `${pass.name}-${step}.png`)
+    ab.run("screenshot", path)
+    console.log(`  ${path}`)
+  }
+  ab.close() // a leftover daemon would keep its old env
+  try {
+    // Open first: any other command starts the daemon, and a daemon started without the open flags is headless.
+    ab.open(APP + pass.query)
+    ab.run("set", "viewport", String(pass.w), String(pass.h))
+    let ready = false
+    const t0 = Date.now()
+    while (!ready && Date.now() - t0 < READY_TIMEOUT_MS) {
+      try {
+        // Scenes are sized to the view, so also wait for the resize to land before loading one.
+        ready = ab.json(`(() => { const s = window.__GAME__?.getState(); return JSON.stringify(!!s && s.ready && Math.abs(s.view.width / s.view.height - ${pass.w / pass.h}) < 0.01) })()`)
+      } catch {
+        // Page still loading.
+      }
+      if (!ready) await sleep(500)
+    }
+    if (!ready) throw new Error(`window.__GAME__ not ready after ${READY_TIMEOUT_MS / 1000}s`)
+
+    const first = ab.json(STEPS.state)
+    row.backend = first.backend ?? "none"
+    if (!expect(first.backend === pass.expect, `backend is ${first.backend}, expected ${pass.expect}${hint(pass, mode, first.backend)}`)) {
+      throw new Error("wrong backend, skipping the rest of this pass")
+    }
+    if (mode === "swiftshader") row.note = "software adapter"
+
+    const loaded = ab.json(STEPS.load)
+    const trail = [`load ${loaded.clouds}`]
+    const step = (name, v) => (trail.push(`${name} ${v.clouds}`), (row.trail = trail.join(", ")), v)
+    expect(loaded.clouds >= 1, `m1 loaded ${loaded.clouds} clouds`)
+    expect(loaded.blobs > 0, `m1 loaded ${loaded.blobs} blobs`)
+    await sleep(300) // a frame or two of the loaded scene
+    shot("initial")
+    if (pass.smoke) return
+
+    const split = step("split", ab.json(STEPS.split))
+    expect(split.clouds > loaded.clouds, `a fast drag did not split: clouds ${loaded.clouds} -> ${split.clouds}`)
+    await sleep(300)
+    shot("split")
+
+    const persist = step("3s", ab.json(STEPS.persist))
+    expect(persist.clouds > loaded.clouds, `pieces did not persist: clouds ${loaded.clouds} -> ${split.clouds} at the split -> ${persist.clouds} 3s later`)
+
+    const merged = step("merge", ab.json(STEPS.merge(split.clouds)))
+    expect(merged.clouds < split.clouds, `pieces never merged: clouds ${split.clouds} at the split, ${merged.clouds} after herding`)
+    await sleep(300)
+    shot("merge")
+
+    const empty = step("empty", ab.json(STEPS.empty))
+    expect(empty.clouds === 0, `the empty scene has ${empty.clouds} clouds`)
+    expect(empty.blobs === 0, `the empty scene has ${empty.blobs} blobs`)
+    await sleep(500)
+    const later = ab.json(STEPS.state)
+    expect(later.frame > empty.frame, `the render loop stopped: frame ${empty.frame} -> ${later.frame}`)
+  } catch (error) {
+    fail(`stopped: ${error.message}`)
+  } finally {
+    try {
+      const pageErrors = ab.run("errors").trim()
+      if (pageErrors && !/no (page )?errors/i.test(pageErrors)) fail(`page errors:\n${pageErrors}`)
+      const lines = ab.run("console").split("\n").map((l) => l.trim()).filter(Boolean)
+      const bad = lines.filter((l) => {
+        if (/^\[vite\]/.test(l)) return false
+        if (WEBGPU_UNAVAILABLE.test(l)) return pass.name === "webgpu" // expected only where we asked for WebGL2
+        if (!l.startsWith("[error]")) return false
+        return !HARMLESS_ERRORS.some((h) => h.re.test(l))
+      })
+      if (bad.length) fail(`console:\n${bad.slice(0, 8).join("\n")}`)
+    } catch (error) {
+      fail(`could not read console/errors: ${error.message}`)
+    }
+    try {
+      row.adapter = ab.json(ADAPTER).slice(0, 90)
+    } catch {
+      // Page gone.
+    }
+    ab.close()
+    row.ok = failures.length === 0
+    if (!row.ok) row.note = failures.join("\n")
+  }
+}
+
+function hint(pass, mode, got) {
+  if (pass.name !== "webgpu") return ""
+  if (mode === "gpu") return " (headed WebGPU needs $DISPLAY and a working GPU; try VERIFY_WEBGPU=swiftshader)"
+  return got === "webgl2" ? " (three fell back to WebGL2; the software WebGPU adapter was not available)" : ""
+}
+
+// -- main ------------------------------------------------------------------------------------------------------------
+const started = Date.now()
+const report = []
+let preview
+const stopPreview = () => {
+  if (preview?.pid) {
+    try {
+      process.kill(-preview.pid, "SIGTERM")
+    } catch {
+      // Already gone.
+    }
+  }
+}
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    stopPreview()
+    for (const p of PASSES) makeAb(p, "-").close()
+    process.exit(130)
+  })
+}
+
+let fatal = ""
+try {
+  try {
+    await fetch(APP)
+    throw new Error(`something is already listening on ${APP}; set VERIFY_PORT`)
+  } catch (error) {
+    if (error.message.startsWith("something")) throw error
+  }
+  mkdirSync(OUT, { recursive: true })
+  console.log("building...")
+  execFileSync("npx", ["vite", "build", "--logLevel", "error"], { cwd: ROOT, stdio: "inherit" })
+  preview = spawn("npx", ["vite", "preview", "--host", "127.0.0.1", "--port", PORT, "--strictPort"], { cwd: ROOT, stdio: "ignore", detached: true })
+  let up = false
+  for (let i = 0; i < 60 && !up; i++) {
+    up = await fetch(APP).then((r) => r.ok, () => false)
+    if (!up) await sleep(250)
+  }
+  if (!up) throw new Error(`preview server did not start on ${APP}`)
+  for (const pass of PASSES) {
+    console.log(`pass ${pass.name} (${pass.w}x${pass.h}${pass.query ? " " + pass.query : ""}${pass.name === "webgpu" ? ", " + WEBGPU_MODE : ""})`)
+    await runPass(pass, report)
+  }
+} catch (error) {
+  fatal = error.message
+} finally {
+  stopPreview()
+}
+
+const pad = (s, n) => String(s).padEnd(n)
+console.log(`\n${pad("pass", 8)}${pad("backend", 9)}${pad("result", 22)}adapter`)
+for (const r of report) {
+  const first = r.note.split("\n")[0]
+  console.log(`${pad(r.pass, 8)}${pad(r.backend, 9)}${pad(r.ok ? `ok${first ? ` (${first})` : ""}` : "FAIL", 22)}${r.adapter}`)
+}
+for (const r of report) if (r.trail) console.log(`${r.pass}: clouds ${r.trail}`)
+const failed = report.filter((r) => !r.ok)
+for (const r of failed) console.error(`\n${r.pass}: ${r.note}`)
+if (fatal) console.error(`\nverify failed: ${fatal}`)
+console.log(`\n${((Date.now() - started) / 1000).toFixed(0)}s, screenshots in ${OUT}`)
+process.exit(failed.length || fatal ? 1 : 0)
