@@ -5,7 +5,7 @@ description: Verify that Cloudy runs and looks right in a real browser on both r
 
 # Verify
 
-`npm run verify` builds the game (`vite build`), serves it with `vite preview` on its own port (43210, `VERIFY_PORT` to change; never a dev server) and runs three passes, each in its own agent-browser session (`verify-webgpu`, `verify-webgl2`, `verify-mobile`). It exits non-zero on any failure and prints a summary table with the backend and GPU each pass saw. About 30 s with a display.
+`npm run verify` builds the game (`vite build`), serves it with `vite preview` on its own port (43210, `VERIFY_PORT` to change; never a dev server) and runs three passes, each in its own agent-browser session (`verify-webgpu`, `verify-webgl2`, `verify-mobile`). It exits non-zero on any failure and prints a summary table with the backend and GPU each pass saw. About 60 s with a display.
 
 | Pass | Browser | Viewport | Must report |
 | --- | --- | --- | --- |
@@ -27,15 +27,16 @@ VERIFY_WEBGPU=swiftshader npm run verify          # software WebGPU even with a 
 
 ## What it asserts
 
-Per desktop pass, through `window.__GAME__` (paused, fixed steps): `m1` loads with clouds and blobs; a fast drag through the biggest cloud raises the cloud count; the pieces are still more than the original 3 s later; herding two pieces together and waiting out the cooldown lowers the count; the `empty` scene has no clouds or blobs; `frame` keeps advancing. Counts are compared, never exact numbers, so sim tuning does not break it. Every pass first takes the pointer from the real mouse (`pointerAbsent()` before `loadScene`; the sim resets the cursor on load) and asserts every cloud centre has `densityAt >= cloudThreshold` (the mobile pass too, so faint phone clouds fail). Each desktop pass ends with a real mouse move to a known pixel with the override released, asserting the sim cursor is present within 0.3 units of the expected world point (covers `pointer.ts` / `clientToWorld`). After both desktop passes, the webgpu and webgl2 sequences (cloud counts and rounded cloud centres at load, split, 3 s, merge, empty) must be identical; `VERIFY_SEQ=1` prints them. Every pass also fails on page errors and console errors; Vite lines are ignored, and three's "WebGPU is not available" warning is expected only in the WebGL2 passes.
+Per desktop pass, through `window.__GAME__` (paused, fixed steps): `m1` loads with clouds and blobs; a fast drag through the biggest cloud raises the cloud count; the pieces are still more than the original 3 s later; herding two pieces together and waiting out the cooldown lowers the count; the `empty` scene has no clouds or blobs; rain (`setWeather("rain", 0)`) gives a steady `rainRate > 0` that changes some interaction params, and a 2 s blend back to clear passes through `transition` and ends at `rainRate` 0; `frame` keeps advancing. The mobile pass takes a rain shot with `rainRate > 0`. Counts are compared, never exact numbers, so sim tuning does not break it. Every pass first takes the pointer from the real mouse (`pointerAbsent()` before `loadScene`; the sim resets the cursor on load) and asserts every cloud centre has `densityAt >= cloudThreshold` (the mobile pass too, so faint phone clouds fail). Each desktop pass ends with a real mouse move to a known pixel with the override released, asserting the sim cursor is present within 0.3 units of the expected world point (covers `pointer.ts` / `clientToWorld`). After both desktop passes, the webgpu and webgl2 sequences (cloud counts and rounded cloud centres at load, split, 3 s, merge, empty; then rain's `rainRate` to 3 decimals and weather state) must be identical; `VERIFY_SEQ=1` prints them. Every pass also fails on page errors and console errors; Vite lines are ignored, and three's "WebGPU is not available" warning is expected only in the WebGL2 passes.
 
 ## Read the screenshots
 
-A pass is not a look. Open `artifacts/verify/{webgpu,webgl2}-{initial,split,merge}.png` and `mobile-initial.png` and check by eye:
+A pass is not a look. Open `artifacts/verify/{webgpu,webgl2}-{initial,split,merge,rain}.png` and `mobile-{initial,rain}.png` and check by eye:
 
 - Clouds are soft and white with a cool, bluish underside; no hard edges or banding.
 - The cursor ring is visible after the split.
 - Nothing is black or blank; the sky fills the whole screenshot and the clouds are inside it, including on the phone.
+- Rain shots: rain streaks are visible; the play clouds are clearly lighter than the sky; the scenery layers show behind them.
 - WebGPU and WebGL2 look the same. A difference is a bug in one backend.
 
 This does not replace `npm run typecheck && npm run lint && npm test`.

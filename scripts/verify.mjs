@@ -121,6 +121,14 @@ const STEPS = {
     }
     ${snap}`),
   empty: game(`g.loadScene("empty"); g.tick(500); ${snap}`),
+  params: game(`return JSON.stringify(g.getParams())`),
+  // Rain at once (0 s blend). Desktop reloads m1 first, since the earlier steps left the sim empty.
+  rain: (ms, reload) => game(`
+    ${reload ? `g.pointerAbsent(); g.loadScene("m1");` : ""} g.setWeather("rain", 0); g.tick(${ms});
+    return JSON.stringify({ weather: g.getState().weather, rainRate: g.getState().rainRate, params: g.getParams() })`),
+  // A 2 s blend back to clear: a transition at 1 s, steady clear at 2.5 s.
+  clearStart: game(`g.setWeather("clear", 2); g.tick(1000); return JSON.stringify({ weather: g.getState().weather, rainRate: g.getState().rainRate })`),
+  clearEnd: game(`g.tick(1500); return JSON.stringify({ weather: g.getState().weather, rainRate: g.getState().rainRate })`),
   state: game(snap),
   // Real mouse path: the harness override is released, so tick reads pointer.ts / clientToWorld. Called after a real move.
   realInput: game(`
@@ -185,6 +193,7 @@ async function runPass(pass, report) {
     if (mode === "swiftshader") row.note = "software adapter"
 
     const loaded = ab.json(STEPS.load)
+    const clear = ab.json(STEPS.params) // clear-weather params, before any rain
     const trail = [`load ${loaded.clouds}`]
     const step = (name, v) => (trail.push(`${name} ${v.clouds}`), (row.trail = trail.join(", ")), seq.push([name, v.clouds, v.sig]), v)
     expect(loaded.clouds >= 1, `m1 loaded ${loaded.clouds} clouds`)
@@ -197,7 +206,13 @@ async function runPass(pass, report) {
     seq.push(["load", loaded.clouds, loaded.sig])
     await sleep(300) // a frame or two of the loaded scene
     shot("initial")
-    if (pass.smoke) return
+    if (pass.smoke) {
+      const rain = ab.json(STEPS.rain(500, false))
+      expect(rain.rainRate > 0, `rain on the phone has rainRate ${rain.rainRate}`)
+      await sleep(300)
+      shot("rain")
+      return
+    }
 
     const split = step("split", ab.json(STEPS.split))
     expect(split.clouds > loaded.clouds, `a fast drag did not split: clouds ${loaded.clouds} -> ${split.clouds}`)
@@ -215,6 +230,20 @@ async function runPass(pass, report) {
     const empty = step("empty", ab.json(STEPS.empty))
     expect(empty.clouds === 0, `the empty scene has ${empty.clouds} clouds`)
     expect(empty.blobs === 0, `the empty scene has ${empty.blobs} blobs`)
+
+    // Weather: rain at once, then a 2 s blend back to clear. Rain must change the look and the interaction params.
+    const rain = ab.json(STEPS.rain(1000, true))
+    expect(rain.weather.kind === "steady" && rain.weather.state === "rain", `setWeather("rain", 0) left weather ${JSON.stringify(rain.weather)}`)
+    expect(rain.rainRate > 0, `rain has rainRate ${rain.rainRate}`)
+    const moved = Object.keys(clear).filter((k) => clear[k] !== rain.params[k])
+    expect(moved.length > 0, "rain changed no interaction param from clear")
+    seq.push(["rain", rain.rainRate.toFixed(3), rain.weather])
+    await sleep(300)
+    shot("rain")
+    const fading = ab.json(STEPS.clearStart)
+    expect(fading.weather.kind === "transition", `a 2 s blend to clear, 1 s in, is ${JSON.stringify(fading.weather)}, not a transition`)
+    const cleared = ab.json(STEPS.clearEnd)
+    expect(cleared.weather.kind === "steady" && cleared.weather.state === "clear" && cleared.rainRate === 0, `after the blend to clear: ${JSON.stringify(cleared)}`)
 
     // Real mouse through pointer.ts: move the browser's own pointer to a known pixel, no override.
     const px = Math.round(pass.w / 2), py = Math.round(pass.h / 8)

@@ -84,11 +84,11 @@ Gameplay is identical on every tier. Tiers change pixel ratio cap, metaball fiel
 | --- | --- |
 | M0 | Repo, AGENTS.md, `window.__GAME__` harness, verify skill (WebGPU and forced WebGL2) |
 | M1 | Gradient sky, middle-layer blob clouds as a metaball field, cursor push with density drag and spring-back, fixed step, split and re-merge with hysteresis |
-| M2 | Weather parameter blending; rain particles |
+| M2 | Weather parameter layers and blending; rain; parallax scenery layers (pulled forward from M6) |
 | M3 | Thunder: strike scheduler, flash, synced audio |
 | M4 | Tornado vortex, curl-noise wind, debris |
 | M5 | Preset scenes, player sliders, saved settings |
-| M6 | Parallax scenery layers, 3D LUT, bloom |
+| M6 | 3D LUT, bloom |
 | M7 | Quality tiers, frame-time governor, perf checks on devices |
 | Later | TLA+ model (invariants listed below), device matrix |
 
