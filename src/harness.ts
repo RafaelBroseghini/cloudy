@@ -1,3 +1,4 @@
+import type { P, WeatherReport, WeatherState } from "./params/index.ts";
 import { BLOB, BLOB_STRIDE, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
@@ -16,6 +17,10 @@ export interface GameState {
   densityAtCursor: number;
   /** Visible world size in units. */
   view: { width: number; height: number };
+  /** Weather state machine: steady (progress 1) or a blend `from` -> `to` (progress 0..1, linear in time). */
+  weather: WeatherReport;
+  /** Resolved `rainRate` (0..1) right now. */
+  rainRate: number;
 }
 
 export interface CloudCentre {
@@ -40,6 +45,11 @@ export interface GameHarnessApi {
   /** Move the overridden pointer linearly over `seconds` of fixed steps, stepping the sim. Leaves the pointer at the end point. */
   drag(x0: number, y0: number, x1: number, y1: number, seconds: number): void;
   loadScene(name: SceneName): void;
+  /** Blend to `state` over `seconds` of weather time (0 = at once). Weather time advances with sim steps. */
+  setWeather(state: WeatherState, seconds: number): void;
+  /** The full flat resolved parameter record (numbers), as the game sees it now. */
+  resolved(): P;
+  /** The sim's interaction params: the resolved weather values (or what `setParams` last wrote). */
   getParams(): Params;
   setParams(partial: Partial<Params>): void;
   cloudCentres(): CloudCentre[];

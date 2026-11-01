@@ -5,6 +5,7 @@
 import { Color, Vector2 } from "three/webgpu";
 import { defaultValues, type Values } from "../params/index.ts";
 import type { CloudyScene } from "./scene.ts";
+import { WIND_SLANT } from "./rain.ts";
 import { DENSITY_TO_COVERAGE, SCENERY_MAP } from "./scenery.ts";
 
 const SKY_KEYS = [
@@ -20,9 +21,10 @@ const SCENERY_KEYS = [
   "nearTint", "nearDrift", "nearDensity",
 ] as const;
 const POST_KEYS = ["fxExposure", "fxFlash"] as const;
+const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
 
 /** The param fields the renderer consumes (a subset of `P`; pass the whole resolved record if convenient). */
-export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...SCENERY_KEYS, ...POST_KEYS] as const;
+export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...SCENERY_KEYS, ...POST_KEYS, ...RAIN_KEYS] as const;
 export type LookKey = (typeof LOOK_KEYS)[number];
 export type LookValues = Partial<Pick<Values, LookKey>>;
 
@@ -85,6 +87,9 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
     u.tint.value.setRGB(BASE[name].tint.r * lit[0]!, BASE[name].tint.g * lit[1]!, BASE[name].tint.b * lit[2]!);
     u.shade.value.setRGB(BASE[name].shade.r * shade[0]!, BASE[name].shade.g * shade[1]!, BASE[name].shade.b * shade[2]!);
   }
+
+  // Rain is render-only; wind slants it (the sim gets the same windX/windY for blobs through the drive).
+  scene.rain.setLook(g("rainRate"), g("rainSpeed"), Math.tan(g("rainAngle")) + g("windX") * WIND_SLANT);
 
   post.exposure.value = g("fxExposure");
   post.flash.value = g("fxFlash");

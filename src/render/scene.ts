@@ -3,6 +3,7 @@ import { float, Fn, length, mix, screenUV, smoothstep, uniform, vec2, vec3, vec4
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { createCloudLook, createFieldTarget, createSplatPass, sampleFieldDensity, shadeClouds } from "./cloudField.ts";
 import { applyLook } from "./look.ts";
+import { createRain } from "./rain.ts";
 import { createScenery } from "./scenery.ts";
 import { createSky } from "./sky.ts";
 import { createViewCamera, fitViewCamera, VIEW_HEIGHT } from "./view.ts";
@@ -37,6 +38,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
 
   const clouds = shadeClouds(target.texture, look, time, aspect);
   const scenery = createScenery();
+  const rain = createRain(scenery.parallax);
   const sceneryCtx = {
     aspect,
     fieldDensity: sampleFieldDensity(target.texture, aspect),
@@ -52,15 +54,24 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const uvUp = vec2(screenUV.x, screenUV.y.oneMinus());
     const wp = uvUp.sub(0.5).mul(vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT));
     const skyColor = sky.colorAt(aspect, uvUp);
-    // Back to front: sky, far bank, mid clouds, the play layer (never shifted), near wisps.
+    // Back to front: sky, far bank, far rain, mid clouds, mid rain, the play layer (never shifted), near wisps, near rain.
+    // Rain bands behind the play layer are hidden by its clouds; the near band is muted over them to keep them readable.
     const far = scenery.far(wp, sceneryCtx);
     const behind = mix(skyColor, far.rgb, far.a);
+    const rainFar = rain.far(wp, sky.horizon, float(0));
+    const behindRain = mix(behind, rainFar.rgb, rainFar.a);
     const mid = scenery.mid(wp, sceneryCtx);
-    const behindPlay = mix(behind, mid.rgb, mid.a);
+    const behindMid = mix(behindRain, mid.rgb, mid.a);
+    const rainMid = rain.mid(wp, sky.horizon, float(0));
+    const behindPlay = mix(behindMid, rainMid.rgb, rainMid.a);
     const c = clouds(wp);
     const playOver = mix(behindPlay, c.rgb, c.a);
     const near = scenery.near(wp, sceneryCtx);
-    const withClouds = mix(mix(playOver, near.rgb, near.a).mul(post.exposure), vec3(1), post.flash.mul(0.75));
+    const withNear = mix(playOver, near.rgb, near.a);
+    const onPlay = smoothstep(0.0, look.threshold.mul(1.4), sceneryCtx.fieldDensity(wp));
+    const rainNear = rain.near(wp, sky.horizon, onPlay);
+    const withRain = mix(withNear, rainNear.rgb, rainNear.a);
+    const withClouds = mix(withRain.mul(post.exposure), vec3(1), post.flash.mul(0.75));
     
     // Soft ring: bright band over a wider faint blue halo so it reads on both sky and cloud.
     const d = length(wp.sub(cursorPos)).sub(cursorRadius).abs();
@@ -77,6 +88,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     aspect.value = width / height;
     fitViewCamera(camera, width / height);
     const pr = renderer.getPixelRatio();
+    rain.setPixelHeight(height * pr);
     target.setSize(
       Math.max(2, Math.round(width * pr * fieldScale)),
       Math.max(2, Math.round(height * pr * fieldScale)),
@@ -94,6 +106,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     look,
     /** Scenery parameters (uniforms): `layers.far|mid|near`, `layers.count`, `layers.grey`, ... See scenery.ts. */
     layers: scenery.layers,
+    /** Rain streak uniforms and look; see rain.ts. Render-only. */
+    rain,
     /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1). */
     post,
     /** Current scenery parallax shift in world units (the play layer ignores it). */
@@ -104,6 +118,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
      */
     updateScenery(pointer: Cursor | null, dt: number): void {
       scenery.update(pointer, (aspect.value * VIEW_HEIGHT) / 2, dt);
+      rain.update(dt);
     },
     setBlobs(buf: Float32Array, count: number): void {
       splat.setBlobs(buf, count);
