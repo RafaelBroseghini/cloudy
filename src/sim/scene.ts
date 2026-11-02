@@ -21,11 +21,11 @@ export interface CloudSpec {
   readonly linkReach?: number
   /** Blob radius = scale * (base + jitter * rnd). Default per type: cumulus [0.42, 0.16], stratus [0.33, 0.12], cumulonimbus [0.44, 0.16]. */
   readonly radius?: readonly [base: number, jitter: number]
-  /** Outline of the lattice points kept: an `ellipse` (stretched by `aspect`) or a `tower` (a tall column under a wider anvil). Default per type. */
+  /** Outline of the lattice points kept: an `ellipse` (stretched by `aspect`), a `tower` (a lumpy column on a broad base under a wider, sheared anvil) or a `sheet` (a thin sheet with uneven, frayed ends). Default per type. */
   readonly outline?: Outline
 }
 
-export type Outline = 'ellipse' | 'tower'
+export type Outline = 'ellipse' | 'tower' | 'sheet'
 
 export interface SceneSpec {
   readonly clouds: readonly CloudSpec[]
@@ -64,20 +64,74 @@ const SHAPE = {
   cumulus: { aspect: 1.3, spacing: 0.75, radius: [0.42, 0.16], reach: 1.3, outline: 'ellipse' },
   // Wide flat sheets of smaller blobs. Neighbour springs only: longer ones (reach 1.8+) hold a sheet together so well that a
   // sweep can no longer tear it, which is the stratus's character.
-  stratus: { aspect: 5, spacing: 0.6, radius: [0.33, 0.12], reach: 1.3, outline: 'ellipse' },
+  stratus: { aspect: 5, spacing: 0.6, radius: [0.33, 0.12], reach: 1.3, outline: 'sheet' },
   cumulonimbus: { aspect: 1, spacing: 0.7, radius: [0.44, 0.16], reach: 1.3, outline: 'tower' },
 } as const satisfies Record<CloudType, { aspect: number; spacing: number; radius: readonly [number, number]; reach: number; outline: Outline }>
 
+const smooth = (a: number, b: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
+
 /**
  * Lattice-point distance from the cloud's centre, in units of the lattice spacing: the `want` smallest are kept.
- * Cumulus and stratus are ellipses (stretched by `aspect`). Cumulonimbus is a union of two ellipses, a tall narrow column
- * and a wider flat anvil sitting on its top, so the cloud is taller than wide and flares at the top.
+ * Cumulus is an ellipse (stretched by `aspect`); a stratus `sheet` is built by `sheetPoints` instead. A cumulonimbus
+ * `tower` has a profile over its height `hv` (lattice units): a broad flat base, a column with cauliflower lumps, and a
+ * wider, flatter anvil that is sheared downwind (to the right). Its distance is the width ratio at that height, so
+ * fewer blobs narrow it evenly instead of cutting off the anvil; points outside the height range come last.
  */
-function outlineDistance(outline: Outline, u: number, v: number, aspect: number): number {
+function outlineDistance(outline: 'ellipse' | 'tower', u: number, v: number, aspect: number, hv: number): number {
   if (outline === 'ellipse') return (u / aspect) ** 2 + v ** 2
-  const column = (u / 1) ** 2 + (v / 4.2) ** 2
-  const anvil = (u / 2.1) ** 2 + ((v - 3.7) / 0.6) ** 2
-  return Math.min(column, anvil)
+  const t = v / hv + 0.5
+  if (t < 0 || t > 1) return 10 + Math.abs(t - 0.5)
+  // Column with lumps (different phases each side), broad at the base, leaning a little downwind with height.
+  const lump = (ph: number): number => (0.4 * Math.sin(12 * t + ph) + 0.2 * Math.sin(25 * t + 2 * ph)) * (0.25 + 0.75 * smooth(0.15, 0.6, t))
+  const body = 2.1 + 0.4 * (1 - smooth(0, 0.3, t)) + 0.1 * smooth(0.3, 0.7, t)
+  const flare = smooth(0.68, 0.8, t)
+  const lean = 0.3 * t + 0.5 * smooth(0.55, 1, t)
+  const left = (body + lump(0.4)) * (1 - flare) + (3.7 + 0.2 * lump(1.7)) * flare
+  const right = (body + lump(2.1)) * (1 - flare) + (4.6 + 0.2 * lump(3.1)) * flare
+  // Rounded lower corners (flat base) and a rounded, slightly domed top.
+  const edge = Math.sqrt(Math.max(0, 1 - ((0.06 - t) / 0.06) ** 2))
+  const t1 = 0.86 + 0.04 * Math.cos(u * 1.7 + 0.8) + 0.03 * Math.cos(u * 3.1)
+  const top = Math.sqrt(Math.max(0, 1 - ((t - t1) / (1 - t1)) ** 2))
+  const taper = t < 0.06 ? edge : t > t1 ? top : 1
+  const dx = u - lean
+  return Math.abs(dx) / (Math.max(0.3, dx < 0 ? left : right) * Math.max(taper, 0.12))
+}
+
+/**
+ * Points of a stratus sheet, in world units, nearest-the-middle first in `d`. Unlike a lattice cut by an outline (which
+ * can only be a few rows thick, so it comes out a rolling pin: thick middle, one-row tails), the thickness follows a
+ * smooth lens along the length, with columns every 0.85 spacings and stacked 0.8 apart, so the sheet thins evenly to
+ * its tips. Columns differ a little in thickness; when the sheet holds more points than wanted, the top and bottom ones drop first, so the length stays and the sheet just gets thinner.
+ */
+function sheetPoints(want: number, s: number, aspect: number, rnd: () => number): Array<{ x: number; y: number; d: number }> {
+  const dx = 0.85 * s
+  const dy = 0.8 * s
+  const lens = (t: number): number => Math.max(0, 1 - Math.abs(t) ** 2.2) ** 0.75
+  const make = (half: number): Array<{ x: number; y: number; d: number }> => {
+    const len = 1.3 * aspect * half * dy
+    const out: Array<{ x: number; y: number; d: number }> = []
+    for (let i = -Math.floor(len / dx); i <= Math.floor(len / dx); i++) {
+      const x = i * dx
+      const h = half * lens(x / len) * (1 + 0.18 * Math.sin(i * 1.9 + 0.7) + 0.08 * Math.sin(i * 4.3))
+      const count = Math.max(1, Math.round(2 * h + 1 - 1e-9))
+      for (let j = 0; j < count; j++) {
+        const y = (j - (count - 1) / 2) * dy + ((i & 1) * 0.5 - 0.25) * dy * 0.5
+        out.push({ x: x + (rnd() - 0.5) * 0.1 * s, y: y + (rnd() - 0.5) * 0.1 * s, d: 0.3 * (x / len) ** 2 + (y / (half * dy + 1e-6)) ** 2 })
+      }
+    }
+    return out
+  }
+  // Smallest half-thickness (in rows) whose sheet holds at least `want` points; the extra outermost points are dropped by the caller.
+  let half = 0.5
+  let pts = make(half)
+  while (pts.length < want && half < 12) {
+    half += 0.05
+    pts = make(half)
+  }
+  return pts
 }
 
 export function buildLayout(spec: SceneSpec): SceneLayout {
@@ -92,19 +146,27 @@ export function buildLayout(spec: SceneSpec): SceneLayout {
     const aspect = c.aspect ?? shape.aspect
     const shapeOutline = c.outline ?? shape.outline
     const want = Math.max(0, Math.min(c.blobs, MAX_BLOBS - blobs.length))
-    // Jittered hex lattice; keep the `want` points nearest the centre in the stretched metric.
-    const pts: Array<{ x: number; y: number; d: number }> = []
-    const reach = Math.ceil(Math.sqrt(want)) + 3
-    for (let r = -reach; r <= reach; r++) {
-      for (let q = -reach; q <= reach; q++) {
-        const x = (q + r * 0.5) * s + (rnd() - 0.5) * 0.12 * s
-        const y = r * 0.866 * s + (rnd() - 0.5) * 0.12 * s
-        pts.push({ x, y, d: shapeOutline === 'ellipse' ? (x / aspect) ** 2 + y ** 2 : outlineDistance(shapeOutline, x / s, y / s, aspect) })
+    // A tower's height grows with its blob count (lattice units), so a small one keeps its proportions.
+    const hv = 1.6 * Math.sqrt(want)
+    // Jittered hex lattice; keep the `want` points nearest the centre in the stretched metric. A sheet makes its own points.
+    let pts: Array<{ x: number; y: number; d: number }> = []
+    if (shapeOutline === 'sheet') {
+      pts = sheetPoints(want, s, aspect, rnd)
+    } else {
+      const reach = Math.ceil(Math.sqrt(want)) + 3
+      for (let r = -reach; r <= reach; r++) {
+        for (let q = -reach; q <= reach; q++) {
+          const x = (q + r * 0.5) * s + (rnd() - 0.5) * 0.12 * s
+          const y = r * 0.866 * s + (rnd() - 0.5) * 0.12 * s
+          pts.push({ x, y, d: shapeOutline === 'ellipse' ? (x / aspect) ** 2 + y ** 2 : outlineDistance(shapeOutline, x / s, y / s, aspect, hv) })
+        }
       }
     }
     pts.sort((p, q) => p.d - q.d)
     const first = blobs.length
     const chosen = pts.slice(0, want).map((p) => ({ x: p.x, y: p.y, radius: k * ((c.radius ?? shape.radius)[0] + (c.radius ?? shape.radius)[1] * rnd()) }))
+    // A sheet undulates gently along its length and tilts a little, so it is not a straight bar.
+    if (shapeOutline === 'sheet') for (const p of chosen) p.y += s * (0.18 * Math.sin(p.x / s * 0.45 + 1.1) + 0.04 * p.x / s)
     // A tower is not symmetric about the lattice origin (the anvil), so centre its outline on (c.x, c.y).
     let cx = 0
     let cy = 0
@@ -223,14 +285,14 @@ const COMPOSITIONS = {
   // Thunder: one or two storm towers with sheets low between and beside them.
   thunder: {
     wide: [
-      ['cumulonimbus', -0.2, 0.0, 0.13, 0.4, 40],
-      ['cumulonimbus', 0.3, -0.04, 0.11, 0.34, 34],
+      ['cumulonimbus', -0.2, 0.0, 0.13, 0.4, 66],
+      ['cumulonimbus', 0.3, -0.04, 0.11, 0.34, 56],
       ['stratus', 0.08, -0.4, 0.1, 0.045, 20],
-      ['stratus', -0.38, 0.38, 0.09, 0.04, 20],
+      ['stratus', -0.395, 0.38, 0.085, 0.04, 20],
     ],
     tall: [
       ['stratus', 0, 0.45, 0.4, 0.03, 20],
-      ['cumulonimbus', 0, 0.065, 0.3, 0.265, 36],
+      ['cumulonimbus', 0, 0.065, 0.3, 0.265, 56],
       ['stratus', 0, -0.34, 0.4, 0.04, 22],
     ],
   },
@@ -238,14 +300,14 @@ const COMPOSITIONS = {
   mixed: {
     wide: [
       ['cumulus', -0.3, 0.27, 0.13, 0.15, 26],
-      ['cumulonimbus', 0.12, 0.0, 0.1, 0.38, 36],
+      ['cumulonimbus', 0.12, 0.0, 0.115, 0.38, 56],
       ['stratus', -0.12, -0.3, 0.17, 0.05, 28],
       ['cumulus', 0.38, 0.28, 0.07, 0.1, 14],
       ['stratus', 0.34, -0.38, 0.1, 0.045, 20],
     ],
     tall: [
       ['cumulus', -0.04, 0.38, 0.28, 0.08, 22],
-      ['cumulonimbus', 0.04, 0.0, 0.26, 0.22, 32],
+      ['cumulonimbus', 0.04, 0.0, 0.26, 0.22, 50],
       ['stratus', 0, -0.345, 0.4, 0.035, 22],
     ],
   },

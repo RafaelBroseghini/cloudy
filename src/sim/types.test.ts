@@ -144,8 +144,8 @@ describe('mixed clouds', () => {
   it('a split keeps types and conserves blobs; energy does not rise without input; 60 and 120 Hz agree', async () => {
     const run = async (hz: number): Promise<string> => {
       const sim = await make(sceneSpec('mixed', 17.8, 10))
-      // The pointer is sampled at 60 Hz whatever the frame rate: a flick through the middle, then idle.
-      const ptr = (f: number) => (f >= 40 && f < 90 ? ({ kind: 'present', x: -9 + (f - 40) * 0.4, y: 0 } as const) : ({ kind: 'absent' } as const))
+      // The pointer is sampled at 60 Hz whatever the frame rate: a flick through the middle (36 units/s: the broad storm tower resists a slower one), then idle.
+      const ptr = (f: number) => (f >= 40 && f < 90 ? ({ kind: 'present', x: -9 + (f - 40) * 0.6, y: 0 } as const) : ({ kind: 'absent' } as const))
       const per = hz / 60
       for (let f = 0; f < 240 * per; f++) {
         if (f % per === 0) sim.setPointer(ptr(f / per))

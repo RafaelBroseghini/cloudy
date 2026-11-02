@@ -43,7 +43,7 @@ Every blob has one type for life: cumulus (the original, baseline), stratus or c
 
 Measured on the real scene clouds (units/s along a sweep): cumulus starts splitting at about 20, cumulonimbus at about 45 to 70 (thunder weather included), a stratus sheet tears from about 6 to 8 into 2 to 4 pieces. Stratus tearing is mostly its geometry: small blobs (short rest length) lower the absolute flick speed, and neighbour springs only (longer springs make a sheet very hard to tear).
 
-Scene shapes (`buildLayout`): stratus is an ellipse of aspect up to 6 of smaller blobs; cumulonimbus is a tall narrow column under a wider anvil (taller than wide, about 1.8:1). Compositions per weather (`sceneSpec`: `clear`, `rain`, `thunder`, `mixed`) are slot lists fitted to the view like m1; counts shrink with width, and a portrait view stacks them vertically.
+Scene shapes (`buildLayout`): stratus is a thin lens-shaped sheet (aspect up to 6) built column by column (`sheetPoints`, so it thins evenly to its tips instead of coming out a rolling pin), undulating a little along its length; cumulonimbus is a `tower` profile over its height (a broad flat base, a column with cauliflower lumps, a wider flatter anvil sheared downwind; taller than wide, about 1.6:1, so it takes more blobs than the other types: 40 to 66). Compositions per weather (`sceneSpec`: `clear`, `rain`, `thunder`, `mixed`) are slot lists fitted to the view like m1; counts shrink with width, and a portrait view stacks them vertically.
 
 | Scene | Clouds (wide view) |
 | --- | --- |
