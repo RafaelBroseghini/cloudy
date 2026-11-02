@@ -5,13 +5,13 @@ description: Verify that Cloudy runs and looks right in a real browser on both r
 
 # Verify
 
-`npm run verify` builds the game (`vite build`), serves it with `vite preview` on its own port (43210, `VERIFY_PORT` to change; never a dev server) and runs three passes, each in its own agent-browser session (`verify-webgpu`, `verify-webgl2`, `verify-mobile`). It exits non-zero on any failure and prints a summary table with the backend and GPU each pass saw. About 80 s with a display.
+`npm run verify` builds the game (`vite build`), serves it with `vite preview` on its own port (43210, `VERIFY_PORT` to change; never a dev server) and runs three passes, each in its own agent-browser session (`verify-webgpu`, `verify-webgl2`, `verify-mobile`). It exits non-zero on any failure and prints a summary table with the backend and GPU each pass saw. About 120 s with a display.
 
 | Pass | Browser | Viewport | Must report |
 | --- | --- | --- | --- |
 | webgpu | headed on the real GPU if `$DISPLAY` is set, else headless SwiftShader | 1280x800 | `backend === "webgpu"` |
 | webgl2 | headless, `?backend=webgl` | 1280x800 | `backend === "webgl2"` |
-| mobile | headless, `?backend=webgl` | 390x844 | smoke: ready, clouds, screenshot |
+| mobile | headless, `?backend=webgl` | 390x844 | smoke: ready, clouds, tier `low`, screenshot |
 
 ```bash
 VERIFY_ONLY=webgl2 npm run verify                 # one pass: webgpu | webgl2 | mobile
@@ -31,11 +31,14 @@ Per desktop pass, through `window.__GAME__` (paused, fixed steps): `m1` loads wi
 
 Thunder, per desktop pass, after the weather step: a real click on the canvas must leave `audio.state` `"running"` (else the gesture unlock broke). Then `setWeather("thunder", 0)` and one `forceStrike({ intensity: 1, d: 1, x: 0.3 })` must be scheduled, with `scheduledThunderAt - tStrike` equal to `d - outputLatency` within 20 ms (both read in one call). The flash is above 0.5 at the peak (`holdFlash(0)`, shot `{pass}-flash.png`) and under 0.05 2.5 s later in real time, and the strike leaves `getParams()` unchanged. The sequence gets `["thunder", d, peak]`, no latency values, since they differ per backend.
 
+Types, per desktop pass, after thunder: each scene (`m1`, `clear`, `rain`, `thunder`, `mixed`) loads and ticks 200 ms, then holds its mix by dominant type (`m1` only cumulus; `clear` cumulus and stratus; `rain` at least 2 stratus; `thunder` at least 1 cumulonimbus; `mixed` all three), with `getState().types` equal to the `cloudCentres()` tally and every centre at `densityAt >= cloudThreshold`. The per-scene counts (`cumulus/stratus/nimbus`) join the equivalence sequence. Strike anchor: in thunder weather a forced strike with no `x` must land within 3 world units of a cumulonimbus centre. This is the loose check: the harness exposes centres, not blob extents, so it cannot test the anchor's true width. Tier: desktop reports `hi`; the phone reports what it picked on load (headless has no coarse pointer, so `hi`), then `setTier("low")` must read back `low`. That proves the setter, not the phone's default; a real phone gets `low` from `pickTier`, and `?tier=low` forces it by hand.
+
 ## Read the screenshots
 
-A pass is not a look. Open `artifacts/verify/{webgpu,webgl2}-{initial,split,merge,rain,flash}.png` and `mobile-{initial,rain}.png` and check by eye:
+A pass is not a look. Open `artifacts/verify/{webgpu,webgl2}-{initial,split,merge,rain,flash,types-clear,types-rain,types-thunder,types-mixed}.png` and `mobile-{initial,rain}.png` and check by eye:
 
 - Clouds are soft and white with a cool, bluish underside; no hard edges or banding.
+- Types shots: cumulus is puffy with volume; stratus is a soft, layered, flat sheet; cumulonimbus is a lit tower with a soft slate base. All three must be distinguishable at a glance.
 - The cursor ring is visible after the split.
 - Nothing is black or blank; the sky fills the whole screenshot and the clouds are inside it, including on the phone.
 - Rain shots: rain streaks are visible; the play clouds are clearly lighter than the sky; the scenery layers show behind them.

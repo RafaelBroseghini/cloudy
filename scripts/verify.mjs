@@ -34,6 +34,15 @@ if (ONLY && PASSES.length === 0) throw new Error(`VERIFY_ONLY=${ONLY}: expected 
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// What each scene must hold, by dominant type (SIM.md, "Scene shapes"). Minimums, so sim tuning does not break it.
+const TYPE_RULES = {
+  m1: { what: "only cumulus", ok: (t) => t.cumulus >= 1 && t.stratus === 0 && t.cumulonimbus === 0 },
+  clear: { what: "cumulus and at least one stratus", ok: (t) => t.cumulus >= 1 && t.stratus >= 1 },
+  rain: { what: "at least 2 stratus", ok: (t) => t.stratus >= 2 },
+  thunder: { what: "at least 1 cumulonimbus", ok: (t) => t.cumulonimbus >= 1 },
+  mixed: { what: "all three types", ok: (t) => t.cumulus >= 1 && t.stratus >= 1 && t.cumulonimbus >= 1 },
+}
+
 // Each pass is its own agent-browser session (its own daemon), because browser args and --webgpu are fixed at daemon
 // start and forced WebGL2 needs a session that never asked for WebGPU.
 function makeAb(pass, mode) {
@@ -139,6 +148,30 @@ const STEPS = {
   holdRelease: game(`g.holdFlash(null); return JSON.stringify(g.flash())`),
   flash: game(`return JSON.stringify(g.flash())`),
   thunderEnd: game(`g.setWeather("clear", 0); g.tick(100); return JSON.stringify(g.getState().weather)`),
+  // A scene's own mix: loaded in the clear weather it is drawn in, 200 ms of steps, then each centre's type and density.
+  types: (name) => game(`
+    g.pointerAbsent(); g.loadScene("${name}"); g.tick(200);
+    const s = g.getState();
+    return JSON.stringify({
+      threshold: g.constants().cloudThreshold,
+      clouds: s.clouds,
+      types: s.types,
+      centres: g.cloudCentres().map((c) => ({ id: c.id, type: c.type, rho: g.densityAt(c.x, c.y) })),
+    })`),
+  // No x given: the strike must start inside a cumulonimbus. Thunder weather is set before the scene so the storm mix shows.
+  anchor: game(`
+    g.pointerAbsent(); g.setWeather("thunder", 0); g.loadScene("thunder"); g.tick(200);
+    const r = g.forceStrike({ intensity: 1 });
+    const s = g.getState();
+    return JSON.stringify({
+      x: r.x, wx: (r.x - 0.5) * s.view.width,
+      nimbi: g.cloudCentres().filter((c) => c.type === "cumulonimbus").map((c) => ({ x: c.x, y: c.y })),
+    })`),
+  tier: game(`return JSON.stringify({ tier: g.getState().tier })`),
+  // Headless has no coarse pointer, so a phone-sized load may pick "hi": report what it picked, then set "low" and read it back.
+  tierLow: game(`const picked = g.getState().tier; if (picked !== "low") g.setTier("low"); return JSON.stringify({ picked, tier: g.getState().tier })`),
+  // Back to the state the real-mouse step has always run in: clear weather, m1, pointer released from the harness.
+  reset: game(`g.setWeather("clear", 0); g.pointerAbsent(); g.loadScene("m1"); g.tick(200); return JSON.stringify({ clouds: g.getState().clouds })`),
   state: game(snap),
   // Real mouse path: the harness override is released, so tick reads pointer.ts / clientToWorld. Called after a real move.
   realInput: game(`
@@ -170,6 +203,12 @@ async function runPass(pass, report) {
   const expect = (cond, msg) => {
     if (!cond) fail(msg)
     return cond
+  }
+  // Every cloud centre must sit in dense enough field to render solid; `where` names the scene in the message.
+  const denseCentres = (dens, where) => {
+    for (const c of dens.centres) {
+      expect(c.rho >= dens.threshold, `${where}cloud ${c.id} centre density ${c.rho.toFixed(3)} is below the render threshold ${dens.threshold}: it would draw faint`)
+    }
   }
   const ab = makeAb(pass, mode)
   const shot = (step) => {
@@ -210,10 +249,14 @@ async function runPass(pass, report) {
     expect(loaded.blobs > 0, `m1 loaded ${loaded.blobs} blobs`)
     const dens = ab.json(STEPS.density)
     row.core = Math.min(...dens.centres.map((c) => c.rho))
-    for (const c of dens.centres) {
-      expect(c.rho >= dens.threshold, `cloud ${c.id} centre density ${c.rho.toFixed(3)} is below the render threshold ${dens.threshold}: it would draw faint`)
-    }
+    denseCentres(dens, "")
     seq.push(["load", loaded.clouds, loaded.sig])
+    if (pass.smoke) {
+      // The phone's tier, before its first shot so the phone screenshots render at the tier it asserts.
+      const t = ab.json(STEPS.tierLow)
+      console.log(`  mobile tier: picked ${t.picked} on load, ${t.tier} after setTier("low")`)
+      expect(t.tier === "low", `phone tier is ${t.tier} after setTier("low"), expected low`)
+    }
     await sleep(300) // a frame or two of the loaded scene
     shot("initial")
     if (pass.smoke) {
@@ -284,6 +327,39 @@ async function runPass(pass, report) {
     expect(changed.length === 0, `a strike changed interaction params: ${changed.join(", ")}`)
     seq.push(["thunder", r.d, Math.round(peak * 100) / 100])
     ab.json(STEPS.thunderEnd)
+
+    // Types: each scene's mix by dominant type, every centre dense enough, and the screenshots of the non-m1 scenes.
+    const mixes = []
+    for (const [name, rule] of Object.entries(TYPE_RULES)) {
+      const t = ab.json(STEPS.types(name))
+      expect(t.clouds >= 1, `${name} loaded ${t.clouds} clouds`)
+      expect(rule.ok(t.types), `${name} should have ${rule.what}, got ${JSON.stringify(t.types)}`)
+      const tally = { cumulus: 0, stratus: 0, cumulonimbus: 0 }
+      for (const c of t.centres) tally[c.type] += 1
+      expect(Object.keys(tally).every((k) => tally[k] === t.types[k]), `${name}: cloudCentres() types ${JSON.stringify(tally)} disagree with getState().types ${JSON.stringify(t.types)}`)
+      denseCentres(t, `${name}: `)
+      mixes.push(`${name}:${t.types.cumulus}/${t.types.stratus}/${t.types.cumulonimbus}`)
+      if (name !== "m1") {
+        await sleep(300)
+        shot(`types-${name}`)
+      }
+    }
+    seq.push(["types", mixes.join(" ")])
+    console.log(`  types (cumulus/stratus/nimbus): ${mixes.join(" ")}`)
+
+    // Strike anchor: thunder weather, then a forced strike with no x must land at the x of a cumulonimbus (the record's x is a
+    // 0..1 screen fraction; wx is the same point in world units). The harness exposes centres, not blob extents, so this is
+    // the loose check: within 3 units of some cumulonimbus centre.
+    const anchor = ab.json(STEPS.anchor)
+    expect(anchor.nimbi.length >= 1, "the thunder scene shows no cumulonimbus for a strike to anchor in")
+    const nearest = Math.min(...anchor.nimbi.map((c) => Math.abs(c.x - anchor.wx)))
+    console.log(`  strike anchor: x ${anchor.x.toFixed(3)} screen = ${anchor.wx.toFixed(2)} units, ${nearest.toFixed(2)} from the nearest of ${anchor.nimbi.length} cumulonimbus centres`)
+    expect(nearest <= 3, `a forced strike with no x landed at x ${anchor.wx.toFixed(2)} (screen ${anchor.x.toFixed(3)}), ${nearest.toFixed(2)} units from the nearest cumulonimbus centre`)
+
+    // Tier: desktop is "hi" (not a coarse pointer). The setter is checked on the phone pass.
+    const tier = ab.json(STEPS.tier)
+    expect(tier.tier === "hi", `desktop tier is ${tier.tier}, expected hi`)
+    ab.json(STEPS.reset)
 
     // Real mouse through pointer.ts: move the browser's own pointer to a known pixel, no override.
     const px = Math.round(pass.w / 2), py = Math.round(pass.h / 8)
