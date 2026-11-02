@@ -1,20 +1,25 @@
-import { RenderPipeline, Vector2, type WebGPURenderer } from "three/webgpu";
+import { RenderPipeline, RenderTarget, HalfFloatType, LinearFilter, Vector2, type WebGPURenderer } from "three/webgpu";
 import { exp, float, Fn, length, mix, screenUV, smoothstep, uniform, vec2, vec3, vec4 } from "three/tsl";
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
-import { createCloudLook, createFieldTarget, createSplatPass, sampleFieldDensity, shadeClouds } from "./cloudField.ts";
+import { createCloudLook, createFieldTarget, createSplatPass, meanBlobRadius, sampleFieldDensity } from "./cloudField.ts";
 import { applyLook } from "./look.ts";
 import { createRain } from "./rain.ts";
 import { createScenery } from "./scenery.ts";
 import { createSky } from "./sky.ts";
+import { initialTier, TIERS, type TierName } from "./tier.ts";
 import { createViewCamera, fitViewCamera, VIEW_HEIGHT } from "./view.ts";
+import { createDetailPass, createHeightSplat, createVolumeLook, lumpFrequency, shadeVolume } from "./volume.ts";
 
 /** Billowing runs at this fraction of its speed under prefers-reduced-motion. */
 const REDUCED_EVOLVE = 0.15;
 
 export interface SceneOptions {
-  /** Field resolution relative to the drawing buffer. 0.5 = half-res. */
-  fieldScale?: number;
+  /** Quality tier; default from the device and `?tier=` (see tier.ts). */
+  tier?: TierName;
 }
+
+/** How fast the blob radius used to size the billows follows the clouds' (per rendered frame): splits never make them pop. */
+const RADIUS_FOLLOW = 0.1;
 
 export interface Cursor {
   x: number;
@@ -22,13 +27,20 @@ export interface Cursor {
 }
 
 export async function createScene(renderer: WebGPURenderer, opts: SceneOptions = {}) {
-  let fieldScale = opts.fieldScale ?? 0.5;
+  let tierName: TierName = opts.tier ?? initialTier();
+  let tier = TIERS[tierName];
 
   const camera = createViewCamera();
   const splat = createSplatPass();
   const target = createFieldTarget();
   const sky = createSky();
   const look = createCloudLook();
+  const vol = createVolumeLook();
+  const halfFloatTarget = () =>
+    new RenderTarget(2, 2, { type: HalfFloatType, depthBuffer: false, minFilter: LinearFilter, magFilter: LinearFilter });
+  const heightTarget = halfFloatTarget();
+  const detailTarget = halfFloatTarget();
+  const heightSplat = createHeightSplat(splat.geometry, vol);
 
   const time = uniform(0);
   const aspect = uniform(1);
@@ -41,8 +53,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   // Cool white-blue, a touch brighter than the sky so the lift reads as light, not as a grey wash.
   const flashTint = vec3(0.78, 0.88, 1.0);
 
-  const clouds = shadeClouds(target.texture, look, time, aspect);
+  const detail = createDetailPass({ fieldTex: target.texture, heightTex: heightTarget.texture, look, vol, aspect });
+  const clouds = shadeVolume({ detailTex: detailTarget.texture, fieldTex: target.texture, look, vol, aspect });
   const scenery = createScenery();
+  const lit = scenery.lit(aspect, vol);
   const rain = createRain(scenery.parallax);
   const sceneryCtx = {
     aspect,
@@ -61,11 +75,11 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const skyColor = sky.colorAt(aspect, uvUp);
     // Back to front: sky, far bank, far rain, mid clouds, mid rain, the play layer (never shifted), near wisps, near rain.
     // Rain bands behind the play layer are hidden by its clouds; the near band is muted over them to keep them readable.
-    const far = scenery.far(wp, sceneryCtx);
+    const far = lit.far(wp, sceneryCtx);
     const behind = mix(skyColor, far.rgb, far.a);
     const rainFar = rain.far(wp, sky.horizon, float(0));
     const behindRain = mix(behind, rainFar.rgb, rainFar.a);
-    const mid = scenery.mid(wp, sceneryCtx);
+    const mid = lit.mid(wp, sceneryCtx);
     const behindMid = mix(behindRain, mid.rgb, mid.a);
     const rainMid = rain.mid(wp, sky.horizon, float(0));
     const behindPlay0 = mix(behindMid, rainMid.rgb, rainMid.a);
@@ -78,7 +92,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const c = clouds(wp);
     const cloudRgb = c.rgb.add(flashTint.mul(post.flash.mul(pool.mul(0.5).add(0.1))));
     const playOver = mix(behindPlay, cloudRgb, c.a);
-    const near = scenery.near(wp, sceneryCtx);
+    const near = lit.near(wp, sceneryCtx);
     const withNear = mix(playOver, near.rgb, near.a);
     const onPlay = smoothstep(0.0, look.threshold.mul(1.4), sceneryCtx.fieldDensity(wp));
     const rainNear = rain.near(wp, sky.horizon, onPlay);
@@ -100,17 +114,31 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     fitViewCamera(camera, width / height);
     const pr = renderer.getPixelRatio();
     rain.setPixelHeight(height * pr);
-    target.setSize(
-      Math.max(2, Math.round(width * pr * fieldScale)),
-      Math.max(2, Math.round(height * pr * fieldScale)),
-    );
+    const sized = (t: RenderTarget, scale: number): void =>
+      t.setSize(Math.max(2, Math.round(width * pr * scale)), Math.max(2, Math.round(height * pr * scale)));
+    for (const t of [target, heightTarget, detailTarget]) sized(t, tier.field);
+    sized(scenery.bakeTarget, tier.bake);
   }
+  let meanRadius = 0.42;
+  let lumpScale = 3;
+  function applyLump(): void {
+    vol.lumpFreq.value = lumpFrequency(lumpScale, meanRadius);
+  }
+  /** Tier: resolutions and march step counts only (uniforms and target sizes), so nothing recompiles. */
+  function applyTier(): void {
+    vol.steps.value = tier.steps;
+    vol.aoTaps.value = tier.aoTaps;
+    vol.sceneSteps.value = tier.sceneSteps;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio));
+  }
+  applyTier();
   applySize(window.innerWidth, window.innerHeight);
 
   // Warm-up: compile the splat pipeline asynchronously, then run one real frame so the composite
   // pipeline exists before the first visible frame.
   splat.setBlobs(new Float32Array(MAX_BLOBS * BLOB_STRIDE), 1);
   await renderer.compileAsync(splat.scene, camera);
+  await renderer.compileAsync(heightSplat.scene, camera);
 
   const api = {
     sky,
@@ -134,6 +162,12 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     },
     setBlobs(buf: Float32Array, count: number): void {
       splat.setBlobs(buf, count);
+      // Billows are sized in blob radii; follow the live mean so a phone layout (smaller blobs) gets smaller lumps.
+      const r = meanBlobRadius(buf, Math.min(count, MAX_BLOBS));
+      if (r > 0) {
+        meanRadius += (r - meanRadius) * RADIUS_FOLLOW;
+        applyLump();
+      }
     },
     setCursor(c: Cursor | null): void {
       if (c) {
@@ -150,12 +184,20 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     setTime(t: number): void {
       time.value = t;
     },
-    setFieldScale(s: number): void {
-      fieldScale = s;
+    /** Light-march and billow uniforms (see volume.ts); `lumpScale` is in blob radii. */
+    vol,
+    setLumpScale(s: number): void {
+      lumpScale = s;
+      applyLump();
+    },
+    setTier(name: TierName): void {
+      tierName = name;
+      tier = TIERS[name];
+      applyTier();
       applySize(window.innerWidth, window.innerHeight);
     },
-    getFieldScale(): number {
-      return fieldScale;
+    getTier(): TierName {
+      return tierName;
     },
     resize(width: number, height: number): void {
       applySize(width, height);
@@ -163,11 +205,21 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     render(): void {
       renderer.setRenderTarget(target);
       renderer.render(splat.scene, camera);
+      renderer.setRenderTarget(heightTarget);
+      renderer.render(heightSplat.scene, camera);
+      renderer.setRenderTarget(detailTarget);
+      detail.quad.render(renderer);
+      scenery.bake(renderer);
       renderer.setRenderTarget(null);
       pipeline.render();
     },
     dispose(): void {
       splat.dispose();
+      heightSplat.dispose();
+      detail.dispose();
+      heightTarget.dispose();
+      detailTarget.dispose();
+      scenery.dispose();
       target.dispose();
       pipeline.dispose();
     },

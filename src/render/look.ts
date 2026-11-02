@@ -10,11 +10,15 @@ import { DENSITY_TO_COVERAGE, SCENERY_BREEZE_GAIN, SCENERY_MAP } from "./scenery
 
 const SKY_KEYS = [
   "skyTopR", "skyTopG", "skyTopB", "skyHorizonR", "skyHorizonG", "skyHorizonB", "skyBottomR", "skyBottomG", "skyBottomB",
-  "skySunR", "skySunG", "skySunB", "skyHorizonHeight", "skySunPosX", "skySunPosY", "skySunSize", "skySunStrength",
+  "skySunR", "skySunG", "skySunB", "skyHorizonHeight", "skySunPosX", "skySunPosY", "skySunSize", "skySunStrength", "skySunDepth",
 ] as const;
 const LIGHT_KEYS = [
-  "lightDirX", "lightDirY", "lightGain", "lightAmbient", "cloudLitR", "cloudLitG", "cloudLitB", "cloudMidR", "cloudMidG",
+  "lightGain", "lightAmbient", "cloudLitR", "cloudLitG", "cloudLitB", "cloudMidR", "cloudMidG",
   "cloudMidB", "cloudShadeR", "cloudShadeG", "cloudShadeB",
+] as const;
+const VOLUME_KEYS = [
+  "volSigma", "volReach", "volRelief", "volWrap", "volPowder", "volPhaseG", "volMultiScatter", "volAmbient", "volAO", "volLumpScale",
+  "volLumpStrength", "volDome", "volHeightCumulus", "volHeightStratus", "volHeightNimbus", "volSilver",
 ] as const;
 const SCENERY_KEYS = [
   "farOpacity", "farTint", "farDrift", "farDensity", "midOpacity", "midTint", "midDrift", "midDensity", "nearOpacity",
@@ -25,7 +29,7 @@ const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
 const BREEZE_KEYS = ["breezeSpeed", "breezeAngle"] as const;
 
 /** The param fields the renderer consumes (a subset of `P`; pass the whole resolved record if convenient). */
-export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...SCENERY_KEYS, ...POST_KEYS, ...RAIN_KEYS, ...BREEZE_KEYS] as const;
+export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...VOLUME_KEYS, ...SCENERY_KEYS, ...POST_KEYS, ...RAIN_KEYS, ...BREEZE_KEYS] as const;
 export type LookKey = (typeof LOOK_KEYS)[number];
 export type LookValues = Partial<Pick<Values, LookKey>>;
 
@@ -49,7 +53,7 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
     return x !== undefined && Number.isFinite(x) ? x : DEFAULTS[k];
   };
 
-  const { sky, look, layers, post } = scene;
+  const { sky, look, vol, layers, post } = scene;
   sky.top.value.setRGB(g("skyTopR"), g("skyTopG"), g("skyTopB"));
   sky.horizon.value.setRGB(g("skyHorizonR"), g("skyHorizonG"), g("skyHorizonB"));
   sky.bottom.value.setRGB(g("skyBottomR"), g("skyBottomG"), g("skyBottomB"));
@@ -59,17 +63,38 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
   sky.sunSize.value = g("skySunSize");
   sky.sunStrength.value = g("skySunStrength");
 
-  const lx = g("lightDirX");
-  const ly = g("lightDirY");
-  look.lightOffset.value.set(lx, ly);
-  look.lightGain.value = g("lightGain");
   look.litColor.value.setRGB(g("cloudLitR"), g("cloudLitG"), g("cloudLitB"));
   look.midColor.value.setRGB(g("cloudMidR"), g("cloudMidG"), g("cloudMidB"));
   // Ambient light lifts the shaded side toward the mid colour (flatter, less contrasty lighting).
   const amb = clamp01(g("lightAmbient"));
   look.shadeColor.value.copy(scratch.setRGB(g("cloudShadeR"), g("cloudShadeG"), g("cloudShadeB")).lerp(look.midColor.value, amb));
-  const len = Math.hypot(lx, ly);
-  (layers.light.value as Vector2).set(len > 1e-6 ? lx / len : 0, len > 1e-6 ? ly / len : 1);
+
+  // The sun that lights the clouds is the sky's sun: its screen position gives the direction in the view plane, and its
+  // depth how far in front of (+) or behind (-) the clouds it sits. The scenery's cast shadows use the same direction.
+  const sx = (g("skySunPosX") - 0.5) * 2;
+  const sy = (g("skySunPosY") - 0.5) * 2;
+  const sz = g("skySunDepth");
+  const sl = Math.hypot(sx, sy, sz) || 1;
+  vol.sun.value.set(sx / sl, sy / sl, sz / sl);
+  const pl = Math.hypot(sx, sy);
+  vol.sunDir.value.set(pl > 0.05 ? sx / pl : 0, pl > 0.05 ? sy / pl : 1);
+  (layers.light.value as Vector2).copy(vol.sunDir.value);
+  // Shadow contrast stretches the shadowed range of the light march (the old `lightGain` slider, same default feel).
+  vol.contrast.value = g("lightGain") * 0.8;
+  vol.sigma.value = g("volSigma");
+  vol.marchLen.value = g("volReach");
+  vol.nk.value = g("volRelief");
+  vol.wrap.value = g("volWrap");
+  vol.powder.value = g("volPowder");
+  vol.gFwd.value = g("volPhaseG");
+  vol.ms.value = g("volMultiScatter");
+  vol.ambient.value = g("volAmbient");
+  vol.aoK.value = g("volAO");
+  vol.lumpStrength.value = g("volLumpStrength");
+  vol.dome.value = g("volDome");
+  vol.zScale.value.set(g("volHeightCumulus"), g("volHeightStratus"), g("volHeightNimbus"));
+  vol.silver.value = g("volSilver");
+  scene.setLumpScale(g("volLumpScale"));
 
   const lit = [g("cloudLitR") * ratio(1, DEFAULT_LIT[0]), g("cloudLitG") * ratio(1, DEFAULT_LIT[1]), g("cloudLitB") * ratio(1, DEFAULT_LIT[2])];
   const shade = [

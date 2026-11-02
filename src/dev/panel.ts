@@ -4,6 +4,7 @@
 import GUI, { type Controller } from 'lil-gui'
 import { WEATHER_STATES, type FieldKey, type P, type WeatherReport, type WeatherState } from '../params/index.ts'
 import { buildRows, isClamped, linearToHex, overridesJson, srgbHexToLinear, type Row } from './model.ts'
+import { TIER_NAMES, type TierName } from '../render/tier.ts'
 import type { DevHost, DevPanel } from './toggle.ts'
 
 const STYLE = `
@@ -54,6 +55,11 @@ export function createDevPanel(host: DevHost): DevPanel {
   gui.add(ui, 'weather', [...WEATHER_STATES]).onChange(() => (document.activeElement as HTMLElement | null)?.blur())
   gui.add(ui, 'seconds', 0, 20, 0.5).name('transition s')
   gui.add({ go: () => api.setWeather(ui.weather, ui.seconds) }, 'go').name('go (blend to weather)')
+  const tierUi = { tier: api.getState().tier }
+  gui.add(tierUi, 'tier', [...TIER_NAMES]).name('quality tier').onChange((t: TierName) => {
+    api.setTier(t)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+  })
   gui.add({ f: () => api.forceStrike() }, 'f').name('force strike')
   for (const name of ['m1', 'clear', 'rain', 'thunder', 'mixed', 'empty'] as const) {
     gui.add({ f: () => api.loadScene(name) }, 'f').name(`load scene ${name}`)
@@ -143,7 +149,7 @@ export function createDevPanel(host: DevHost): DevPanel {
       const pauseLabel = s.paused ? 'resume' : 'pause'
       if (pauseCtrl.$name.textContent !== pauseLabel) pauseCtrl.name(pauseLabel)
       stats.textContent =
-        `${fps.toFixed(0)} fps   sim ${host.simStepMs().toFixed(2)} ms/step   ${s.backend ?? '?'}\n` +
+        `${fps.toFixed(0)} fps   sim ${host.simStepMs().toFixed(2)} ms/step   ${s.backend ?? '?'} ${s.tier}\n` +
         `${s.clouds} clouds  ${s.blobs} blobs  ${s.springs} springs\n` +
         `weather ${weatherText(s.weather)}   ${Object.keys(dev).length} overrides`
     }

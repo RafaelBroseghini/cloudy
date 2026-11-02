@@ -1,10 +1,13 @@
 import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
+import type { TierName } from "./render/tier.ts";
 import { CLOUD_TYPES, summarizeClouds, type CloudType, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
   ready: boolean;
   backend: "webgpu" | "webgl2" | null;
+  /** Render quality tier: resolution scales and light-march steps only; gameplay is identical on every tier. */
+  tier: TierName;
   /** Rendered frames. */
   frame: number;
   /** Fixed sim steps run since the last scene load. */
@@ -63,6 +66,8 @@ export interface GameHarnessApi {
   flash(): number;
   /** Freeze the latest strike's flash at `tau` seconds from its peak (negative = during the rise); null releases. For screenshots. */
   holdFlash(tau: number | null): void;
+  /** Switch the render quality tier now (`hi` | `mid` | `low`): resizes the render targets and sets step counts; compiles nothing. */
+  setTier(tier: TierName): void;
   /** The full flat resolved parameter record (numbers), as the game sees it now. */
   resolved(): P;
   /** Dev layer (above weather and user, below the strike flash; any field, interaction included): set overrides, clamped to each field's range. */

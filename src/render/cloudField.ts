@@ -1,6 +1,6 @@
 // Metaball cloud field.
 // Pass 1 (splat): one instanced quad per blob, additively splatted into a half-res half-float target.
-// Pass 2 (shade): `shadeClouds` turns the density into lit cloud colour over the sky (called from scene.ts).
+// The thickness, billows and lighting built on this field live in volume.ts.
 
 import {
   AddEquation,
@@ -24,15 +24,9 @@ import {
 } from "three/webgpu";
 import {
   attribute,
-  clamp,
   dot,
   float,
-  Fn,
   max,
-  mix,
-  mx_fractal_noise_float,
-  mx_fractal_noise_vec2,
-  smoothstep,
   texture,
   uniform,
   vec2,
@@ -133,6 +127,8 @@ export function createSplatPass() {
 
   return {
     scene,
+    /** The shared instanced blobs: volume.ts draws its height splat from the same geometry (one upload for both). */
+    geometry,
     /** Point the instance data at the sim's buffer (no copy) and mark it for upload. */
     setBlobs(buf: Float32Array, count: number): void {
       if (buf !== interleaved.array) {
@@ -153,6 +149,20 @@ export function createSplatPass() {
       material.dispose();
     },
   };
+}
+
+/** Mean radius of the live blobs, weighted by mass: sizes the billows so they follow the clouds' scale (phone layouts are smaller). */
+export function meanBlobRadius(buf: Float32Array, count: number): number {
+  let sum = 0;
+  let w = 0;
+  for (let i = 0; i < count; i++) {
+    const o = i * BLOB_STRIDE;
+    if (buf[o + BLOB.alive] === 0) continue;
+    const m = buf[o + BLOB.mass] as number;
+    sum += (buf[o + BLOB.radius] as number) * m;
+    w += m;
+  }
+  return w > 0 ? sum / w : 0;
 }
 
 export function createFieldTarget(): RenderTarget {
@@ -185,11 +195,6 @@ export function createCloudLook() {
     /** Domain warp: reach (world units) and spatial frequency of the swirl that makes the edges roll. */
     warp: uniform(0.4),
     warpScale: uniform(0.45),
-    /** Strength of the noise's contribution to the shading, so the interior billows too (0 = flat interior). */
-    billowShade: uniform(0.16),
-    /** World-space offset toward the light used for the second density sample. */
-    lightOffset: uniform(new Vector2(-0.3, 1.1)),
-    lightGain: uniform(2.6),
     litColor: uniform(new Color("#ffffff")),
     midColor: uniform(new Color("#dfe9f6")),
     shadeColor: uniform(new Color("#9fb3d6")),
@@ -200,19 +205,20 @@ export function createCloudLook() {
     stratus: {
       /** Edge erosion and noise-driven shading: smoother than cumulus, but not uniform. */
       erosion: uniform(1.6),
-      billowShade: uniform(0.5),
       /** Wider soft edge (as a multiple of the base; under 1.9, or the ramp starts below zero density and leaves a hard rim where the field ends). */
       softness: uniform(1.85),
       /** Light gain: weak, so the sheet is evenly lit rather than modelled. */
       gain: uniform(0.7),
       /** 0..1 (not a multiplier): how far the colour goes to grey. */
-      grey: uniform(0.55),
+      grey: uniform(0.3),
       /** Multiplier on coverage: a thin sheet, so the sky and rain show a little through. */
       alpha: uniform(0.88),
       /** 0..1: how much the thin fringe of a sheet goes translucent on top of that. */
       thin: uniform(0.6),
+      /** Soft roll along the sheet: how much the stretched noise swells and thins its thickness (0 = a flat slab). */
+      roll: uniform(1.2),
       /** Multiplier on the final colour: a dimmer, overcast sheet. */
-      tone: uniform(0.86),
+      tone: uniform(0.97),
       /** Noise stretch along x and y (a sheet streaks horizontally) and the share of the cumulus swirl kept. */
       stretch: uniform(new Vector2(0.2, 1.7)),
       /** How much the stretched noise streaks the sheet's brightness and its opacity (0 = smooth). */
@@ -220,24 +226,19 @@ export function createCloudLook() {
       streakAlpha: uniform(0.4),
       warp: uniform(0.5),
       /** 0..1: how much of the sheet's lower part is shaded toward grey. */
-      under: uniform(0.6),
+      under: uniform(0.35),
     },
     nimbus: {
       /** Edge erosion and softness: billowy like cumulus, a little crisper. */
       erosion: uniform(1.1),
       softness: uniform(0.75),
-      /** Light gain, and how far (times the light offset's height) the shadow sample reaches. */
+      /** Light gain. */
       gain: uniform(0.8),
-      reach: uniform(0.85),
-      /** Most that the modelled light may shade a tower (1 = down to the shade colour): hollows between domes stay grey, never slate. */
-      cap: uniform(0.62),
-      /** Multiplier on the noise-driven shading, so the lumps of the column read inside the cloud too. */
-      billowShade: uniform(2),
       /** Height within the cloud (0..1) under which the base is dark, and how dark (0..1 of the shade). */
       baseEnd: uniform(0.5),
       baseDark: uniform(0.9),
       /** 0..1: how much of the middle goes to the mid colour (grey body between the bright top and dark base). */
-      midBand: uniform(0.85),
+      midBand: uniform(0.4),
       /** 0..1: how far the dark base is lifted toward the mid colour (slate, not black). */
       lift: uniform(0.1),
       /** Multiplier on the shade colour and on the lit colour (brighter top). */
@@ -254,89 +255,4 @@ export function sampleFieldDensity(fieldTex: RenderTarget["texture"], aspect: No
   const field = texture(fieldTex);
   const extent = vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT);
   return (p: Node<"vec2">): Node<"float"> => field.sample(p.div(extent).add(0.5).flipY()).r;
-}
-
-/**
- * Returns the cloud colour (rgb) and coverage (a) at world position `wp`.
- * `time` and `aspect` are uniform nodes; `fieldTex` is the splat target's texture.
- */
-export function shadeClouds(
-  fieldTex: RenderTarget["texture"],
-  look: CloudLook,
-  time: Node<"float">,
-  aspect: Node<"float">,
-) {
-  const field = texture(fieldTex);
-  const extent = vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT);
-  const { stratus: st, nimbus: nb } = look;
-
-  // Render-target textures are sampled y-down on both backends (three flips them on WebGL), like screenUV.
-  const fieldAt = (p: Node<"vec2">) => field.sample(p.div(extent).add(0.5).flipY());
-
-  // Soft-saturated, un-eroded density for lighting: interior stays flat so only real surfaces shade.
-  const body = Fn(([p]: [Node<"vec2">]) => {
-    const d = fieldAt(p).r;
-    return d.mul(-0.8).exp().oneMinus();
-  });
-
-  // 1 + fSt (kSt - 1) + fNb (kNb - 1): a per-pixel multiplier that is exactly 1 for cumulus.
-  const byType = (fSt: Node<"float">, fNb: Node<"float">, kSt: Node<"float">, kNb: Node<"float">) =>
-    fSt.mul(kSt.sub(1)).add(fNb.mul(kNb.sub(1))).add(1);
-
-  return Fn(([p]: [Node<"vec2">]) => {
-    const f = fieldAt(p);
-    const d = f.r;
-    // Local type mix: the stratus and cumulonimbus shares of the density here.
-    const inv = float(1).div(max(d, 0.02));
-    const fSt = clamp(f.g.mul(inv), 0, 1);
-    const fNb = clamp(f.b.mul(inv), 0, 1);
-    // Height within the pixel's own cloud (0 base .. 1 top), the density-weighted mean of its blobs' heights.
-    const hf = clamp(f.a.mul(inv), 0, 1);
-
-    // Noise in the air's frame, bent by a slowly evolving swirl so edges roll and billow instead of sliding.
-    // Stratus pixels stretch it along x (streaks) and keep less of the swirl.
-    const q = p.sub(look.air);
-    const warpK = look.warp.mul(mix(float(1), st.warp, fSt));
-    const warp = mx_fractal_noise_vec2(vec3(q.mul(look.warpScale), look.billow.mul(0.6).add(11.3)), 2, 2, 0.5).mul(warpK);
-    const stretch = vec2(mix(float(1), st.stretch.x, fSt), mix(float(1), st.stretch.y, fSt));
-    const n = mx_fractal_noise_float(vec3(q.add(warp).mul(look.noiseScale).mul(stretch), look.billow), 3, 2, 0.5);
-    // Multiplicative erosion keeps empty sky empty and only bites near the edges.
-    const erosion = look.erosion.mul(byType(fSt, fNb, st.erosion, nb.erosion));
-    const f0 = d.mul(n.mul(erosion).add(1));
-    const soft = look.softness.mul(byType(fSt, fNb, st.softness, nb.softness));
-    const coverage = smoothstep(look.threshold.sub(soft), look.threshold.add(soft), f0);
-
-    // The side toward the light is denser => we are in shadow; emptier or equal => lit. A tower reaches a little farther up.
-    const reach = byType(fSt, fNb, float(1), nb.reach);
-    const upPos = p.add(look.lightOffset.mul(vec2(1, reach)));
-    const above = fieldAt(upPos).r.mul(-0.8).exp().oneMinus();
-    const diff = body(p).sub(above);
-    const gain = look.lightGain.mul(byType(fSt, fNb, st.gain, nb.gain));
-    const billowShade = look.billowShade.mul(byType(fSt, fNb, st.billowShade, nb.billowShade));
-    const modelled = clamp(diff.mul(gain).negate().add(n.mul(billowShade)), 0, 1).mul(byType(float(0), fNb, float(1), nb.cap));
-    // Soft vertical gradient on top of the modelled light: a tower's lowest part and a sheet's underside go dark. The
-    // noise bends the boundary, so it follows the billows instead of cutting a straight line.
-    const hn = hf.add(n.mul(0.09));
-    const baseK = fNb.mul(nb.baseDark).mul(smoothstep(0, nb.baseEnd, hn).oneMinus());
-    const underK = fSt.mul(st.under).mul(smoothstep(0, 0.75, hn).oneMinus());
-    const extra = baseK.oneMinus().mul(underK.oneMinus()).oneMinus();
-    // Added in the remaining headroom, so with no tower or sheet here (extra = 0) the shade is exactly the cumulus one.
-    const shade = smoothstep(0, 1, modelled.add(modelled.oneMinus().mul(extra)));
-    // Thin edges read slightly lighter and bluer, like scattered sky light.
-    const rim = smoothstep(look.threshold, look.threshold.mul(4), f0).oneMinus().mul(0.35);
-    const litBase = mix(look.litColor, look.midColor, rim).mul(byType(float(0), fNb, float(1), nb.lit));
-    // A tower's body is grey between its bright top and dark base.
-    const midK = fNb.mul(nb.midBand).mul(smoothstep(0.3, 0.9, hn).oneMinus());
-    const lit = mix(litBase, look.midColor, midK);
-    const darkBase = look.shadeColor.mul(byType(float(0), fNb, float(1), nb.dark));
-    const dark = mix(darkBase, look.midColor, fNb.mul(nb.lift));
-    const colored = mix(lit, dark, shade);
-    // Stratus goes grey: toward its own luminance.
-    const luma = dot(colored, vec3(0.299, 0.587, 0.114));
-    const streakK = n.mul(fSt);
-    const color = mix(colored, vec3(luma), fSt.mul(st.grey)).mul(byType(fSt, float(0), st.tone, float(1))).mul(streakK.mul(st.streak).add(1));
-    // Sheets are translucent at their thin fringe.
-    const thin = smoothstep(look.threshold, look.threshold.mul(3.5), f0).oneMinus().mul(fSt).mul(st.thin);
-    return vec4(color, coverage.mul(byType(fSt, float(0), st.alpha, float(1))).mul(thin.oneMinus()).mul(clamp(streakK.mul(st.streakAlpha).add(1), 0, 1)));
-  });
 }

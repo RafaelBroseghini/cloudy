@@ -10,7 +10,7 @@ A 2.5D browser toy played with mouse, trackpad or touch. The cursor pushes throu
 
 | Decision | Consequence |
 | --- | --- |
-| 2.5D: one flat play plane plus parallax layers | Clouds are per-layer 2D fields; no 3D raymarch. |
+| 2.5D: one flat play plane plus parallax layers | Clouds are per-layer 2D fields lit as 2.5D volumes: per-blob hemisphere heights + light marching through the thickness map; no per-blob 3D raymarch. |
 | Only the middle layer is interactive | One blob sim and one density sampler. Scenery layers are render-only. |
 | Splits persist; pieces always re-merge on touch, in any weather | Breakable springs; merges are gated by hysteresis so pieces do not re-merge right after a split. |
 | Weather changes interaction | One typed parameter set per weather state, blended over time. |
@@ -76,7 +76,7 @@ One sky shader evaluates the analytic (Preetham `SkyMesh`) and gradient models a
 
 ## Quality tiers
 
-Gameplay is identical on every tier. Tiers change pixel ratio cap, metaball field resolution, noise octaves, particle counts, bloom, scenery layer count. A frame-time governor steps tiers (no thermal API on phones).
+Gameplay is identical on every tier. Tiers change pixel ratio cap, field/thickness/bake resolution and the light-march step counts (`hi`/`mid`/`low`, `src/render/tier.ts`; `docs/RENDER.md`); they never toggle features, so nothing recompiles. Later tiers may also scale noise octaves, particle counts, bloom, scenery layer count. A frame-time governor steps tiers (no thermal API on phones).
 
 ## Milestones
 

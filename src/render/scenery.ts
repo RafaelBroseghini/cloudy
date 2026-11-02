@@ -7,21 +7,30 @@
 // scale and edge softness by depth, drift speed by depth, parallax (`depth` factor: shift = offset * (1 - depth)),
 // and a faint soft shadow of the play clouds on the layers behind.
 
-import { Color, Vector2, Vector3, type Node } from "three/webgpu";
+import { Color, HalfFloatType, LinearFilter, NodeMaterial, QuadMesh, RenderTarget, Vector2, Vector3, type Node, type Renderer } from "three/webgpu";
 import {
   clamp,
   exp,
   float,
+  Fn,
   max,
   mix,
   mx_fractal_noise_float,
+  screenUV,
   smoothstep,
+  sqrt,
+  texture,
   uniform,
+  vec2,
   vec3,
   vec4,
 } from "three/tsl";
 import { createParallax } from "./parallax.ts";
 import { VIEW_HEIGHT } from "./view.ts";
+import { extentOf, ign, litTerms, texUV, type VolumeLook } from "./volume.ts";
+
+/** Half thickness (world units) of a layer's densest part: a far bank is a thin hazy slab, the near wisps puffier. */
+const LAYER_Z = { far: 0.55, mid: 0.8, near: 0.5 } as const;
 
 interface LayerDefaults {
   opacity: number;
@@ -178,81 +187,117 @@ export function createScenery() {
 
   const weightOf = (index: number) => clamp(layers.count.sub(index), 0, 1);
 
-  /** Shared layer body. `region` is a 0..1 mask that pushes density up where the layer should live. */
-  function draw(
-    u: SceneryLayer,
-    index: number,
-    wp: Node<"vec2">,
-    ctx: SceneryContext,
-    opts: { octaves: number; lit: boolean; region: (p: Node<"vec2">) => Node<"float">; avoidPlay: boolean },
-  ) {
-    const shift = parallax.mul(float(1).sub(u.depth));
-    const p = wp.sub(shift).sub(u.phase.xy);
-    const field = (q: Node<"vec2">) =>
-      mx_fractal_noise_float(vec3(q.mul(u.scale), u.phase.z), opts.octaves, 2, 0.5).add(
-        opts.region(q).mul(u.bandWeight),
-      );
-
-    const s0 = field(p);
-    const coverage = smoothstep(u.coverage.sub(u.softness), u.coverage.add(u.softness), s0);
-
-    // Underside shading: cheap vertical gradient; the lit layer also compares density toward the light.
-    const g = smoothstep(-1, 1, p.y.sub(u.bandCenter).div(u.bandWidth));
-    let shadeAmount: Node<"float"> = float(1).sub(g).mul(0.55);
-    if (opts.lit) {
-      const toLight = field(p.add(layers.light.mul(0.7))).sub(s0);
-      shadeAmount = max(shadeAmount.mul(0.5), smoothstep(0, 1, clamp(toLight.mul(2.4), 0, 1)));
-    }
-    // Soft shadow of the play clouds, offset away from the light more for layers farther back.
-    const reach = float(1).sub(u.depth).max(0).mul(SHADOW_REACH);
-    const playBody = float(1).sub(ctx.fieldDensity(wp.add(layers.light.mul(reach))).mul(-0.8).exp());
-    shadeAmount = max(shadeAmount, playBody.mul(u.shadow));
-
-    let color: Node<"vec3"> = mix(u.tint, u.shade, clamp(shadeAmount, 0, 1));
-    color = mix(color, ctx.horizon, u.haze);
-    color = mix(color, color.mul(layers.greyTint), layers.grey);
-
-    let alpha = coverage.mul(u.opacity).mul(weightOf(index));
-    if (opts.avoidPlay) {
-      // Foreground wisps stay off the play clouds and the cursor so play stays readable.
-      const onCloud = smoothstep(0.0, ctx.playThreshold.mul(1.4), ctx.fieldDensity(wp));
-      const nearCursor = float(1)
-        .sub(smoothstep(ctx.cursorRadius, ctx.cursorRadius.add(2.2), wp.sub(ctx.cursorPos).length()))
-        .mul(ctx.cursorActive);
-      alpha = alpha.mul(float(1).sub(onCloud.mul(0.8))).mul(float(1).sub(nearCursor.mul(0.85)));
-    }
-    return vec4(color, alpha);
-  }
-
+  // Lit scenery (quarter-res bake): each layer's thickness goes to one channel of a small target, and the composite lights
+  // it with the same terms as the play layer. Far banks are hazier and lower in contrast, so the play clouds stay the focus.
+  const sunGlobal = (vol: VolumeLook) => vol.sunDir;
+  const bakeMaterial = new NodeMaterial();
   const band = (u: SceneryLayer) => (p: Node<"vec2">) => {
     const d = p.y.sub(u.bandCenter).div(u.bandWidth);
     return exp(d.mul(d).negate());
   };
+  const regionOf = {
+    far: band(layers.far),
+    mid: band(layers.mid),
+  };
+  /** Coverage-ish 0..1 of a layer's noise at a layer-space point, in the same terms as the old flat layers (edge ramp over 3 softness). */
+  function layerH(u: SceneryLayer, octaves: number, region: (p: Node<"vec2">) => Node<"float">, wp: Node<"vec2">, zs: number): Node<"float"> {
+    const shift = parallax.mul(float(1).sub(u.depth));
+    const p = wp.sub(shift).sub(u.phase.xy);
+    const s0 = mx_fractal_noise_float(vec3(p.mul(u.scale), u.phase.z), octaves, 2, 0.5).add(region(p).mul(u.bandWeight));
+    const a = clamp(s0.sub(u.coverage.sub(u.softness)).div(u.softness.mul(3)), 0, 1);
+    return sqrt(a).mul(zs);
+  }
+  // Evaluated in screen space (not layer space) so the wisps hug the screen edges whatever the parallax.
+  const nearRegion = (aspect: Node<"float">) => (_p: Node<"vec2">, wp: Node<"vec2">) => {
+    const halfW = aspect.mul(VIEW_HEIGHT * 0.5);
+    const edge = smoothstep(0.45, 1.0, wp.x.div(halfW).abs());
+    const bottom = smoothstep(float(-VIEW_HEIGHT * 0.1), float(-VIEW_HEIGHT * 0.5), wp.y);
+    return max(edge, bottom);
+  };
+
+  const target = new RenderTarget(2, 2, {
+    type: HalfFloatType,
+    depthBuffer: false,
+    minFilter: LinearFilter,
+    magFilter: LinearFilter,
+  });
+  let bakeQuad: QuadMesh | null = null;
+  let bakeAspect: Node<"float"> | null = null;
+
+  /** Build the bake pass and return the lit layer functions. Called once by the scene, with its aspect and volume look. */
+  function lit(aspect: Node<"float">, vol: VolumeLook) {
+    bakeAspect = aspect;
+    bakeMaterial.fragmentNode = Fn(() => {
+      const uvUp = vec2(screenUV.x, screenUV.y.oneMinus());
+      const wp = uvUp.sub(0.5).mul(extentOf(aspect));
+      const far = layerH(layers.far, 2, regionOf.far, wp, LAYER_Z.far);
+      const mid = layerH(layers.mid, 3, regionOf.mid, wp, LAYER_Z.mid);
+      const near = layerH(layers.near, 2, (p) => nearRegion(aspect)(p, wp), wp, LAYER_Z.near);
+      return vec4(far, mid, near, 1);
+    })();
+    bakeMaterial.depthTest = false;
+    bakeMaterial.depthWrite = false;
+    bakeQuad = new QuadMesh(bakeMaterial);
+
+    const bake = texture(target.texture);
+    const layer = (name: "far" | "mid" | "near", ch: "r" | "g" | "b", index: number, aoOn: boolean) => {
+      const u = layers[name];
+      const zs = LAYER_Z[name];
+      const Hat = (p: Node<"vec2">) => bake.sample(texUV(p, aspect))[ch];
+      return (wp: Node<"vec2">, ctx: SceneryContext) => {
+        const h = Hat(wp);
+        const a = h.div(zs).pow(2);
+        const coverage = smoothstep(0, 0.667, a);
+        const T = litTerms({ Hat, wp, h, vol, steps: vol.sceneSteps, aoTaps: aoOn ? vol.aoTaps : null, jitter: ign() });
+        // Aerial perspective: hazier layers lose lighting contrast (pulled to a flat mean), then drift to the horizon colour.
+        const contrast = float(1).sub(u.haze.mul(0.5));
+        const direct = mix(float(0.64), T.lt.mul(mix(float(0.6), float(1), T.wd)), contrast);
+        const shadeAmt = clamp(float(1).sub(direct), 0, 1).mul(mix(float(1), T.ao, 0.8));
+        // Soft shadow of the play clouds, offset toward the sun more for layers farther back.
+        const reach = float(1).sub(u.depth).max(0).mul(SHADOW_REACH);
+        const playBody = float(1).sub(ctx.fieldDensity(wp.add(sunGlobal(vol).mul(reach))).mul(-0.8).exp());
+        const shade = max(shadeAmt, playBody.mul(u.shadow));
+        let color: Node<"vec3"> = mix(u.tint, u.shade, clamp(shade, 0, 1));
+        color = mix(color, ctx.horizon, u.haze);
+        color = mix(color, color.mul(layers.greyTint), layers.grey);
+        let alpha = coverage.mul(u.opacity).mul(weightOf(index));
+        if (name === "near") {
+          // Foreground wisps stay off the play clouds and the cursor so play stays readable.
+          const onCloud = smoothstep(0.0, ctx.playThreshold.mul(1.4), ctx.fieldDensity(wp));
+          const nearCursor = float(1)
+            .sub(smoothstep(ctx.cursorRadius, ctx.cursorRadius.add(2.2), wp.sub(ctx.cursorPos).length()))
+            .mul(ctx.cursorActive);
+          alpha = alpha.mul(float(1).sub(onCloud.mul(0.8))).mul(float(1).sub(nearCursor.mul(0.85)));
+        }
+        return vec4(color, alpha);
+      };
+    };
+    return {
+      /** Far hazy bank: thickness only (no ring AO). Shadowed by the play clouds. */
+      far: layer("far", "r", 0, false),
+      /** Mid clouds: the one layer with ring AO. */
+      mid: layer("mid", "g", 1, true),
+      /** Near wisps: big and soft, only toward the bottom and the screen sides. */
+      near: layer("near", "b", 2, false),
+    };
+  }
 
   return {
     layers,
     parallax,
-    /** Far hazy bank: low frequency, 2 octaves, flat shading, shadowed by the play clouds. */
-    far: (wp: Node<"vec2">, ctx: SceneryContext) =>
-      draw(layers.far, 0, wp, ctx, { octaves: 2, lit: false, region: band(layers.far), avoidPlay: false }),
-    /** Mid clouds: 3 octaves plus a light-side sample for modelling. */
-    mid: (wp: Node<"vec2">, ctx: SceneryContext) =>
-      draw(layers.mid, 1, wp, ctx, { octaves: 3, lit: true, region: band(layers.mid), avoidPlay: false }),
-    /** Near wisps: 2 octaves, big and soft, only toward the bottom and the screen sides. */
-    near: (wp: Node<"vec2">, ctx: SceneryContext) =>
-      draw(layers.near, 2, wp, ctx, {
-        octaves: 2,
-        lit: false,
-        avoidPlay: true,
-        region: () => {
-          const halfW = ctx.aspect.mul(VIEW_HEIGHT * 0.5);
-          // Evaluated in screen space (not layer space) so the wisps hug the screen edges whatever the parallax.
-          const sx = wp.x.div(halfW).abs();
-          const edge = smoothstep(0.45, 1.0, sx);
-          const bottom = smoothstep(float(-VIEW_HEIGHT * 0.1), float(-VIEW_HEIGHT * 0.5), wp.y);
-          return max(edge, bottom);
-        },
-      }),
+    lit,
+    /** The bake target (quarter-res thickness of all three layers) and its resize: the scene owns the resolution. */
+    bakeTarget: target,
+    /** Render the bake pass into its target. */
+    bake(renderer: Renderer): void {
+      if (!bakeQuad || !bakeAspect) return;
+      renderer.setRenderTarget(target);
+      bakeQuad.render(renderer);
+    },
+    dispose(): void {
+      target.dispose();
+      bakeMaterial.dispose();
+    },
     /**
      * Per rendered frame: pointer in world units (null = absent), view half extents, and elapsed seconds.
      * Integrates drift on the CPU so changing drift speeds never makes the layers jump.

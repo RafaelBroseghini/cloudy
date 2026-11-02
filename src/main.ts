@@ -137,6 +137,7 @@ async function main(): Promise<void> {
       return {
         ready,
         backend,
+        tier: scene.getTier(),
         frame,
         step: s.step,
         paused,
@@ -200,6 +201,9 @@ async function main(): Promise<void> {
       strikes.hold(tau);
       updateFlash();
       present();
+    },
+    setTier(tier) {
+      scene.setTier(tier);
     },
     resolved: () => ({ ...drive.drive.p }),
     setDev(partial) {
