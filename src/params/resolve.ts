@@ -1,4 +1,4 @@
-// P = defaults + scene + weather + user + dev + transient; later layer wins per field, unset fields fall through.
+// P = defaults + scene + sky + weather + user + dev + transient; later layer wins per field, unset fields fall through.
 import { PARAM_KEYS, clampParams, type Params } from '../sim/params.ts'
 import {
   FIELD_KEYS,
@@ -14,11 +14,28 @@ import {
 } from './fields.ts'
 import { weatherLayer, type Weather } from './weather.ts'
 
-/** Placeholder subset of continuous, non-interaction fields that M5's sliders may drive. */
-export const SLIDER_KEYS = ['fxExposure', 'lightAmbient', 'skySunStrength', 'rainRate', 'midDensity'] as const satisfies readonly FieldKey[]
-export type SliderKey = (typeof SLIDER_KEYS)[number]
-/** Empty by default; M5 fills it from saved sliders. */
-export type UserLayer = { [K in SliderKey]?: number }
+/**
+ * Fields the time-of-day slider writes: sky colours, the sun and the cloud lighting tints. They sit BELOW the weather
+ * layer (`Layers.sky`), so a grey rain sky still wins over a sunset and blends in over a weather transition.
+ */
+export const SKY_KEYS = [
+  'skyTopR', 'skyTopG', 'skyTopB', 'skyHorizonR', 'skyHorizonG', 'skyHorizonB', 'skyBottomR', 'skyBottomG', 'skyBottomB',
+  'skySunR', 'skySunG', 'skySunB', 'skySunPosX', 'skySunPosY', 'skySunSize', 'skySunStrength', 'skySunDepth',
+  'cloudLitR', 'cloudLitG', 'cloudLitB', 'cloudMidR', 'cloudMidG', 'cloudMidB', 'cloudShadeR', 'cloudShadeG', 'cloudShadeB',
+] as const satisfies readonly FieldKey[]
+export type SkyKey = (typeof SKY_KEYS)[number]
+export type SkyLayer = { [K in SkyKey]?: number }
+
+/**
+ * Fields the other player sliders write (they win over the weather): never `strikesEnabled` or any other step/feature
+ * field, never a raw interaction field. The squish slider reaches the sim only through the bounded `squish` multiplier.
+ */
+export const USER_KEYS = [
+  'breezeSpeed', 'volLumpStrength', 'volHeightCumulus', 'rainRate', 'strikeRate', 'parallaxStrength', 'squish',
+] as const satisfies readonly FieldKey[]
+export type UserKey = (typeof USER_KEYS)[number]
+/** Empty unless the player has set a slider (src/settings builds it); an unset slider follows the scene and weather. */
+export type UserLayer = { [K in UserKey]?: number }
 
 /** A strike may touch lighting and post-FX only; interaction fields are not in the type. */
 export type TransientKey = KeysOf<'lighting' | 'postfx'>
@@ -28,6 +45,8 @@ export const TRANSIENT_KEYS: readonly TransientKey[] = keysOfGroup('lighting', '
 export interface Layers {
   /** Preset scene (any field). */
   readonly scene?: Layer
+  /** Time-of-day sky and lighting (`SKY_KEYS` only), applied before the weather so the weather mood blends on top. */
+  readonly sky?: SkyLayer
   readonly user?: UserLayer
   /** Developer overrides (any field, interaction included): above weather and user, below the strike flash. Dev panel only. */
   readonly dev?: Layer
@@ -49,8 +68,12 @@ function apply(out: Values, layer: Layer | undefined, keys: readonly FieldKey[])
 export function resolve(layers: Layers, weather: Weather): P {
   const out = defaultValues()
   apply(out, layers.scene, FIELD_KEYS)
+  apply(out, layers.sky, SKY_KEYS)
   apply(out, weatherLayer(weather, { ...out }), FIELD_KEYS)
-  apply(out, layers.user, SLIDER_KEYS)
+  apply(out, layers.user, USER_KEYS)
+  // Before the dev layer, so a dev override of an interaction field stays exact; the dev layer's own squish still counts.
+  const dv = layers.dev?.squish
+  applySquish(out, typeof dv === 'number' && Number.isFinite(dv) ? dv : out.squish)
   apply(out, layers.dev, FIELD_KEYS)
   apply(out, layers.transient, TRANSIENT_KEYS)
   for (const k of FIELD_KEYS) out[k] = clampField(k, out[k])
@@ -58,6 +81,21 @@ export function resolve(layers: Layers, weather: Weather): P {
   const ip = clampParams(pick(out, PARAM_KEYS))
   for (const k of PARAM_KEYS) out[k] = ip[k]
   return Object.freeze(out)
+}
+
+/**
+ * The squish multiplier m (above 1 = squishier): stiffness /= m, damping *= sqrt(m), yield /= sqrt(m), split *= sqrt(m).
+ * Yield stays under 0.9x split. Only these four fields change, and m = 1 (the default) leaves every value untouched.
+ * The merge gate, cursor and type multipliers are never touched, so `d_touch < d_release` still holds.
+ */
+function applySquish(out: Values, squish: number): void {
+  const m = clampField('squish', squish)
+  if (m === 1) return
+  const r = Math.sqrt(m)
+  out.k_s = out.k_s / m
+  out.c = out.c * r
+  out.splitStrain = out.splitStrain * r
+  out.yieldStrain = Math.min(out.yieldStrain / r, out.splitStrain * 0.9)
 }
 
 function pick<K extends FieldKey>(p: Values, keys: readonly K[]): { [Q in K]: number } {

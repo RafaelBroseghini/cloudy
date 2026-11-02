@@ -46,7 +46,7 @@ export interface SceneLayout {
   readonly springs: Array<readonly [number, number]>
 }
 
-export type SceneName = 'm1' | 'empty' | 'clear' | 'rain' | 'thunder' | 'mixed'
+export type SceneName = 'm1' | 'empty' | 'clear' | 'rain' | 'thunder' | 'mixed' | 'lone'
 
 /** Small deterministic PRNG (mulberry32); the sim must not touch Math.random. */
 export function mulberry32(seed: number): () => number {
@@ -296,6 +296,11 @@ const COMPOSITIONS = {
       ['stratus', 0, -0.34, 0.4, 0.04, 22],
     ],
   },
+  // One big cumulus in the middle of the sky (the "lone cloud" scene).
+  lone: {
+    wide: [['cumulus', 0, 0.02, 0.2, 0.22, 36]],
+    tall: [['cumulus', 0, 0.04, 0.4, 0.15, 32]],
+  },
   // A bit of everything.
   mixed: {
     wide: [
@@ -311,7 +316,7 @@ const COMPOSITIONS = {
       ['stratus', 0, -0.345, 0.4, 0.035, 22],
     ],
   },
-} as const satisfies Record<'clear' | 'rain' | 'thunder' | 'mixed', Composition>
+} as const satisfies Record<'clear' | 'rain' | 'thunder' | 'mixed' | 'lone', Composition>
 
 /** The same width-based count shrink as m1. */
 function compose(c: Composition, viewW: number, viewH: number): CloudSpec[] {
@@ -331,6 +336,7 @@ export function sceneSpec(name: SceneName, viewW: number, viewH: number): SceneS
     case 'rain':
     case 'thunder':
     case 'mixed':
+    case 'lone':
       return { clouds: compose(COMPOSITIONS[name], viewW, viewH) }
   }
 }

@@ -186,7 +186,17 @@ export function sceneForWeather(w: WeatherState): SceneName {
   return w === 'tornado' ? 'mixed' : w
 }
 
-export function parseWeatherParam(search: string): WeatherState {
+/** The `?weather=` state, or null when the param is absent or unknown (so saved settings can tell "absent" from "clear"). */
+export function parseWeatherParamOpt(search: string): WeatherState | null {
   const v = new URLSearchParams(search).get('weather')
-  return v === 'rain' || v === 'thunder' || v === 'tornado' ? v : 'clear'
+  return v === 'clear' || v === 'rain' || v === 'thunder' || v === 'tornado' ? v : null
+}
+
+export function parseWeatherParam(search: string): WeatherState {
+  return parseWeatherParamOpt(search) ?? 'clear'
+}
+
+/** The weather state that is steady now, or the one a blend is heading to. */
+export function targetWeather(w: Weather): WeatherState {
+  return w.kind === 'steady' ? w.state : w.to
 }

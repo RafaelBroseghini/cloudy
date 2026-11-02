@@ -61,7 +61,7 @@ export function createDevPanel(host: DevHost): DevPanel {
     ;(document.activeElement as HTMLElement | null)?.blur()
   })
   gui.add({ f: () => api.forceStrike() }, 'f').name('force strike')
-  for (const name of ['m1', 'clear', 'rain', 'thunder', 'mixed', 'empty'] as const) {
+  for (const name of ['m1', 'clear', 'rain', 'thunder', 'mixed', 'lone', 'empty'] as const) {
     gui.add({ f: () => api.loadScene(name) }, 'f').name(`load scene ${name}`)
   }
   const pauseCtrl = gui.add({ f: () => api.pause(!api.getState().paused) }, 'f').name('pause')

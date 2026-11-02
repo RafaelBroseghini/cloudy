@@ -304,6 +304,8 @@ export function createScenery() {
      */
     /** True while prefers-reduced-motion is on: evolution everywhere runs much slower. */
     reduced: (): boolean => reduced,
+    /** Scale of the parallax shift (the depth slider): 0 = flat, 1 = default. Eases in `update`. */
+    setParallaxStrength: (s: number): void => motion.setStrength(s),
     update(pointer: { x: number; y: number } | null, halfW: number, dt: number): void {
       motion.setTarget(pointer ? { x: pointer.x / halfW, y: pointer.y / (VIEW_HEIGHT / 2) } : null);
       motion.step(dt);

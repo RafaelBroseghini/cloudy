@@ -11,12 +11,16 @@ export interface ParallaxOptions {
   follow?: number;
   /** Start in reduced-motion mode. */
   reducedMotion?: boolean;
+  /** Scale of the whole offset (cursor shift and sway): 0 = flat, 1 = default. */
+  strength?: number;
 }
 
 export interface Parallax {
   /** Pointer in normalised view coordinates (-1..1, x right, y up), or null while the pointer is absent. */
   setTarget(p: { x: number; y: number } | null): void;
   setReducedMotion(on: boolean): void;
+  /** Scale of the offset (0 = no movement, 1 = default); eases in, so a slider drag never makes the layers jump. */
+  setStrength(s: number): void;
   /** Advance by `dt` seconds (clamped, so a stalled tab cannot throw the layers across the screen). */
   step(dt: number): void;
   /** Current offset. Mutated in place by `step`; copy it if you keep it. */
@@ -34,6 +38,8 @@ export const REDUCED_CURSOR_SCALE = 0.25;
 /** Vertical parallax is weaker than horizontal: screens are wide and vertical drift reads as bobbing. */
 const Y_SCALE = 0.6;
 const MAX_DT = 0.25;
+/** Matches the `parallaxStrength` field's range. */
+const MAX_STRENGTH = 2;
 /** Two incommensurate, very slow periods (seconds) so the sway never visibly repeats. */
 const SWAY_PERIOD_X = 37;
 const SWAY_PERIOD_Y = 53;
@@ -53,6 +59,9 @@ export function createParallax(opts: ParallaxOptions = {}): Parallax {
   let cy = 0;
   let swayGain = reduced ? 0 : 1;
   let time = 0;
+  const clampStrength = (v: number | undefined): number => (v !== undefined && Number.isFinite(v) ? Math.max(0, Math.min(MAX_STRENGTH, v)) : 1);
+  let strengthTarget = clampStrength(opts.strength);
+  let strength = strengthTarget;
   const offset = { x: 0, y: 0 };
 
   return {
@@ -64,6 +73,9 @@ export function createParallax(opts: ParallaxOptions = {}): Parallax {
     setReducedMotion(on) {
       reduced = on;
     },
+    setStrength(s) {
+      strengthTarget = clampStrength(s);
+    },
     step(dt) {
       const d = Number.isFinite(dt) ? Math.max(0, Math.min(MAX_DT, dt)) : 0;
       time += d;
@@ -74,8 +86,10 @@ export function createParallax(opts: ParallaxOptions = {}): Parallax {
       cy += (ty * scale * Y_SCALE - cy) * a;
       swayGain += ((reduced ? 0 : 1) - swayGain) * a;
       const tau = Math.PI * 2;
-      offset.x = cx + Math.sin((time / SWAY_PERIOD_X) * tau) * maxSway * swayGain;
-      offset.y = cy + Math.sin((time / SWAY_PERIOD_Y) * tau) * maxSway * Y_SCALE * swayGain;
+      strength += (strengthTarget - strength) * a;
+      if (Math.abs(strengthTarget - strength) < 1e-4) strength = strengthTarget; // land exactly: 0 means no movement at all
+      offset.x = (cx + Math.sin((time / SWAY_PERIOD_X) * tau) * maxSway * swayGain) * strength;
+      offset.y = (cy + Math.sin((time / SWAY_PERIOD_Y) * tau) * maxSway * Y_SCALE * swayGain) * strength;
     },
   };
 }

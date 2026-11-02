@@ -151,6 +151,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     post,
     /** Current scenery parallax shift in world units (the play layer ignores it). */
     parallax: scenery.parallax.value,
+    /** Scale of that shift (cursor follow and idle sway; the rain bands share it): 0 = flat, 1 = default. */
+    setParallaxStrength(s: number): void {
+      scenery.setParallaxStrength(s);
+    },
     /**
      * Per rendered frame: pointer in world units (null = absent) and elapsed seconds. Moves only scenery;
      * the play layer and pointer->world mapping are unaffected.

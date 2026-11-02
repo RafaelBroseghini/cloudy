@@ -1,6 +1,7 @@
 import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
 import type { TierName } from "./render/tier.ts";
+import type { Randomized, SceneId, SceneRef, Settings, SliderKey, SliderState, SliderValues } from "./settings/index.ts";
 import { CLOUD_TYPES, summarizeClouds, type CloudType, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
@@ -31,6 +32,8 @@ export interface GameState {
   audio: { state: string; outputLatency: number | null };
   /** Strikes fired so far and the latest one's record. */
   strikes: { count: number; last: StrikeReport | null };
+  /** Saved player settings: the weather the buttons last chose and the scene id (`custom` after a tweak, `shuffled` after the dice). */
+  settings: { weather: WeatherState; scene: SceneRef };
 }
 
 export interface CloudCentre {
@@ -56,10 +59,27 @@ export interface GameHarnessApi {
   pointerRelease(): void;
   /** Move the overridden pointer linearly over `seconds` of fixed steps, stepping the sim. Leaves the pointer at the end point. */
   drag(x0: number, y0: number, x1: number, y1: number, seconds: number): void;
-  /** `"m1" | "empty" | "clear" | "rain" | "thunder" | "mixed"`: the last four are compositions of cumulus, stratus and cumulonimbus. */
+  /** `"m1" | "empty" | "clear" | "rain" | "thunder" | "mixed" | "lone"`: the last five are compositions (`lone` is one cumulus). */
   loadScene(name: SceneName): void;
   /** Blend to `state` over `seconds` of weather time (0 = at once). Weather time advances with sim steps. */
   setWeather(state: WeatherState, seconds: number): void;
+  /** The player settings: `{ weather, scene, sliders }`, sliders holding only the ones that are set (0..1). */
+  getSettings(): Settings;
+  /** Set one slider (0..1, clamped); the scene becomes `custom`. Saved after 300 ms. */
+  setSlider(key: SliderKey, v: number): void;
+  setSliders(partial: SliderValues): void;
+  /** Unset a slider so it follows the scene and weather again. */
+  clearSlider(key: SliderKey): void;
+  /** A scene: weather blend (4 s) + its sliders + clouds respawned when the layout differs (or the scene is re-applied). */
+  applyScene(id: SceneId): void;
+  /** A weather button: changes the weather only (4 s blend) and clears the rain and thunder sliders so they follow it. */
+  setWeatherPreset(state: WeatherState): void;
+  /** The dice; `seed` makes it repeatable. Returns what was rolled. */
+  randomize(seed?: number): Randomized;
+  /** Defaults (sunny), clouds respawned, saved settings forgotten. */
+  resetSettings(): void;
+  /** Per slider: effective 0..1 `value`, whether the player `set` it, whether it is `enabled` (thunder: thunder weather only) and its friendly `word`. */
+  sliderState(): Record<SliderKey, SliderState>;
   /** Fire a strike now. `intensity` 0..1, `d` seconds from flash to thunder, `x` 0..1 across the screen; missing fields are drawn. */
   forceStrike(o?: StrikeForce): StrikeReport;
   /** The current flash value (0..1), read off the strike clock. */

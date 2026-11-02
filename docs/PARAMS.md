@@ -4,10 +4,11 @@
 
 ## Layer order
 
-`P = defaults ⊕ scene ⊕ weather ⊕ user ⊕ dev ⊕ transient`. Later wins per field; unset fields (and non-finite values) fall through. Then every field is clamped to its range and the interaction subset goes through `clampParams` (`d_touch < d_release`).
+`P = defaults ⊕ scene ⊕ sky ⊕ weather ⊕ user ⊕ dev ⊕ transient`. Later wins per field; unset fields (and non-finite values) fall through. Then every field is clamped to its range and the interaction subset goes through `clampParams` (`d_touch < d_release`).
 
 - `scene`: `Layer` (any field). The weather layer is blended against the scene-below values, so a scene shows through wherever a preset leaves a field unset.
-- `user`: `UserLayer`, a placeholder limited to `SLIDER_KEYS` (continuous, non-interaction). Empty until M5.
+- `sky`: `SkyLayer`, limited to `SKY_KEYS` (sky colours, sun, `cloudLit/Mid/Shade`): the time-of-day slider. It sits below the weather, which blends over it, so a grey rain sky still wins.
+- `user`: `UserLayer`, limited to `USER_KEYS` (`breezeSpeed`, `volLumpStrength`, `volHeightCumulus`, `rainRate`, `strikeRate`, `parallaxStrength`, `squish`): the other player sliders, built by `src/settings` (`docs/SETTINGS.md`); empty unless the player set one. `resolve` applies `squish` (a multiplier on `k_s`, `c`, `yieldStrain`, `splitStrain`) after the user layer and before the dev layer; at 1 nothing changes. `strikesEnabled` and raw interaction fields cannot be in it (type error, and ignored if smuggled).
 - `dev`: `Layer` (any field, interaction included), written by the dev panel or the harness (`setDev` / `clearDev`). It sits above weather and user, so an override survives weather changes while untouched fields keep following the blend; clearing a key falls back to the layers below. Values are range-clamped when stored, and `d_touch < d_release` is still enforced at resolve. Never set by gameplay code.
 - `transient`: `TransientLayer`, typed to lighting and post-FX keys only. `resolve` also reads only `TRANSIENT_KEYS`, so a cast cannot smuggle in sim fields.
 
@@ -19,10 +20,11 @@ The backtick key or `?dev` opens a lil-gui panel (0.21.0, loaded by dynamic impo
 
 - `interaction`: the sim's `PARAM_SPECS` except the per-type multipliers.
 - `types`: `stratus{Drag,Stiff,Damp,Yield,Creep,Split,Flick,Mass,Breeze}` and the same `nimbus*` (0.1 to 5; values in `docs/SIM.md`). They are sim params like the rest (`interactionOf`, `sim.setParams`); weather scales the base and these multiply on top. Cumulus has none (it is the base).
+- `feel`: `squish` (0.6 to 1.6, default 1), the squishiness multiplier above. Not a sim param.
 - `sky`: `skyTop/Horizon/Bottom/Sun{R,G,B}` (linear RGB), horizon height, sun x/y/size/strength.
 - `lighting`: `lightGain` (shadow contrast), `lightAmbient`, `cloudLit/Mid/Shade{R,G,B}`. The light direction is the sky's sun (`skySunPosX/Y` for the view-plane direction, `skySunDepth` for in front of / behind the clouds); `lightDirX/Y` are gone.
 - `volume`: how the play clouds are lit as 2.5D volumes (`src/render/volume.ts`, `docs/RENDER.md`): `volSigma` (extinction), `volReach` (march length), `volRelief` (normal strength), `volWrap`, `volPowder`, `volPhaseG`, `volMultiScatter`, `volAmbient`, `volAO`, `volLumpScale` (billow size in blob radii), `volLumpStrength`, `volDome`, `volHeightCumulus/Stratus/Nimbus` (thickness per type), `volSilver`. Render-only; march step counts come from the quality tier, not from a field.
-- `scenery`: `far`, `mid`, `near` x `Opacity|Tint|Drift|Density`. Render-only.
+- `scenery`: `far`, `mid`, `near` x `Opacity|Tint|Drift|Density`, plus `parallaxStrength` (0 to 2, default 1: scale of the cursor shift and idle sway of the scenery and rain bands). Render-only.
 - `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (strikes per second, mean), `strikesEnabled` (step), and the breeze below.
 - `postfx`: `fxExposure`, `fxFlash` (0), `fxFlashX` (0.5: screen x of the flash glow), `fxFlashY` (0.55: its screen height, 0 bottom).
 
@@ -70,7 +72,7 @@ sim.step()
 // per rendered frame, only when P changed: applyLook(scene, P)  (uniforms; rain slant/rate included)
 ```
 
-- Opening scene: `sceneForWeather` (clear to `clear`, rain to `rain`, thunder to `thunder`, tornado to `mixed`) picks the scene `main.ts` loads for the initial weather. Changing weather later never respawns clouds.
+- Opening scene: saved settings load first; their scene's layout, else `sceneForWeather` (clear to `clear`, rain to `rain`, thunder to `thunder`, tornado to `mixed`), is what `main.ts` loads. Changing weather later never respawns clouds; applying a settings scene does.
 - Wind: blob acceleration is `WIND_ACCEL_GAIN (0.2) * windX|windY`, uniform for now. It goes to `sim.setWind`, which acts on blobs only; the cursor equation has no wind input. Uniform wind leans every cloud toward one view edge, so in tornado they pile up and merge after about a minute. M4 replaces it with the vortex plus curl noise.
 - Rain: `windX` also slants the streaks: `tan(angle) = tan(rainAngle) + 0.12 * windX`.
 - Transitions: `setDriveWeather` (harness `setWeather`, keys 1..4 use 4 s). Layers (`setDriveLayers`) swap scene/user/transient for M3/M5.

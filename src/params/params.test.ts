@@ -5,8 +5,9 @@ import { FIELD_KEYS, FIELD_SPECS, defaultValues, type FieldKey, type Layer } fro
 import { clearDriveDev, createDrive, createDriveRunner, setDriveDev } from './drive.ts'
 import { WEATHER_KEYS, WEATHER_PRESETS } from './presets.ts'
 import {
-  SLIDER_KEYS,
+  SKY_KEYS,
   TRANSIENT_KEYS,
+  USER_KEYS,
   interactionOf,
   resolve,
   type P,
@@ -69,10 +70,11 @@ describe('spec table', () => {
     expect(interactionOf(resolve({}, steady('clear')))).toEqual(defaultParams())
   })
 
-  it('slider keys are continuous non-interaction fields; transient keys are lighting or postfx only', () => {
-    for (const k of SLIDER_KEYS) {
+  it('user and sky keys are continuous non-interaction fields; transient keys are lighting or postfx only', () => {
+    for (const k of [...USER_KEYS, ...SKY_KEYS]) {
       expect(FIELD_SPECS[k].kind).toBe('linear')
       expect(FIELD_SPECS[k].group).not.toBe('interaction')
+      expect((PARAM_KEYS as readonly string[]).includes(k)).toBe(false)
     }
     for (const k of TRANSIENT_KEYS) expect(['lighting', 'postfx']).toContain(FIELD_SPECS[k].group)
     expect(TRANSIENT_KEYS.length).toBeGreaterThan(0)
@@ -164,7 +166,8 @@ describe('blending', () => {
 describe('layer order', () => {
   it('later layer wins; unset fields fall through', () => {
     fc.assert(
-      fc.property(layerOf(FIELD_KEYS.filter((k) => !WEATHER_KEYS.includes(k))), (scene) => {
+      // squish is a multiplier on other fields, so it is left out here (src/settings tests it)
+      fc.property(layerOf(FIELD_KEYS.filter((k) => !WEATHER_KEYS.includes(k) && k !== 'squish')), (scene) => {
         const base = resolve({}, steady('rain'))
         const p = resolve({ scene }, steady('rain'))
         for (const k of FIELD_KEYS) {

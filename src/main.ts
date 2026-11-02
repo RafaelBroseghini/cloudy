@@ -1,7 +1,17 @@
 import { createAudioEngine, installUnlock } from "./audio/engine.ts";
 import { installDevPanel, isTypingTarget } from "./dev/toggle.ts";
 import { createPointerInput } from "./input/pointer.ts";
-import { createDriveRunner, parseWeatherParam, reportWeather, sceneForWeather, WEATHER_STATES } from "./params/index.ts";
+import { createDriveRunner, parseWeatherParamOpt, reportWeather, targetWeather, WEATHER_STATES } from "./params/index.ts";
+import {
+  browserStorage,
+  clearSavedSettings,
+  createSaver,
+  createSettingsController,
+  layersOf,
+  layoutOf,
+  loadSettings,
+  type Settings,
+} from "./settings/index.ts";
 import { flashLayer, createStrikeDirector, nimbusAnchors } from "./strikes/index.ts";
 import { applyLook } from "./render/look.ts";
 import { createRenderer } from "./render/renderer.ts";
@@ -16,6 +26,7 @@ import {
 } from "./harness.ts";
 import { CLOUD_THRESHOLD, createBlobBuffer, createSim, INFLUENCE_FACTOR, FIXED_DT, summarizeClouds, type Pointer, type SceneName } from "./sim/index.ts";
 import { createFixedStepper } from "./sim/fixedStep.ts";
+import { mulberry32 } from "./sim/scene.ts";
 
 /** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
 const RENDER_INTERVAL_MS = 1000 / 60;
@@ -46,9 +57,16 @@ async function main(): Promise<void> {
   const loadScene = (name: SceneName): void => {
     sim.loadScene(name, viewWidth(window.innerWidth / window.innerHeight), VIEW_HEIGHT);
   };
-  // The opening scene matches the weather it opens in; switching weather later does not respawn clouds.
-  const initialWeather = parseWeatherParam(location.search);
-  loadScene(sceneForWeather(initialWeather));
+  // Saved settings load BEFORE the first spawn (storage may be missing or blocked: defaults are a normal outcome). `?reset`
+  // forgets them; `?weather=` still wins for the weather. The opening layout is the saved scene's, else the weather's.
+  const search = location.search;
+  if (new URLSearchParams(search).has("reset")) clearSavedSettings();
+  const saved = loadSettings();
+  const weatherParam = parseWeatherParamOpt(search);
+  const startSettings: Settings =
+    weatherParam !== null && weatherParam !== saved.weather ? { ...saved, weather: weatherParam, scene: "custom" } : saved;
+  const initialLayout = layoutOf(startSettings);
+  loadScene(initialLayout);
 
   // Resize refits the camera, field and containment rect; clouds keep their world positions (no scene reload).
   const fitView = (): void => {
@@ -58,8 +76,8 @@ async function main(): Promise<void> {
   window.addEventListener("resize", fitView);
   fitView();
 
-  // Weather: the drive resolves P (defaults + scene + weather) and pushes interaction params and wind to the sim.
-  const drive = createDriveRunner(sim, {}, initialWeather);
+  // Weather: the drive resolves P (defaults + sky + weather + user + dev + transient) and pushes interaction params and wind to the sim.
+  const drive = createDriveRunner(sim, layersOf(startSettings), startSettings.weather);
 
   // Lightning: one strike record feeds the flash (transient layer, post-FX only) and the thunder (Web Audio).
   const audio = createAudioEngine(import.meta.env.BASE_URL);
@@ -85,6 +103,36 @@ async function main(): Promise<void> {
     drive.setLayers({ transient: flashLayer(f) });
   };
   const stepper = createFixedStepper();
+
+  // Player settings: the only path that persists (raw setWeather, loadScene and keys 1..4 never write storage).
+  const saver = createSaver(browserStorage);
+  const settings = createSettingsController(
+    startSettings,
+    initialLayout,
+    {
+      setLayers: (l) => drive.setLayers(l),
+      setWeather: (state, seconds) => drive.setWeather(state, seconds),
+      loadScene: (name) => {
+        loadScene(name);
+        stepper.reset();
+      },
+      resolved: () => drive.drive.p,
+      weather: () => targetWeather(drive.drive.weather),
+    },
+    {
+      schedule: (s) => saver.schedule(s),
+      clear: () => {
+        saver.cancel();
+        clearSavedSettings();
+      },
+    },
+  );
+  // The save is debounced: write a pending change when the page goes away.
+  window.addEventListener("pagehide", () => saver.flush());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saver.flush();
+  });
+
   let lookP: unknown = null;
   /** CPU-side look push: uniforms only, and only when the resolved params changed. */
   const pushLook = (): void => {
@@ -152,6 +200,7 @@ async function main(): Promise<void> {
         rainRate: drive.drive.p.rainRate,
         audio: audio.report(),
         strikes: { count: strikes.count, last: strikes.last },
+        settings: { weather: settings.get().weather, scene: settings.get().scene },
       };
     },
     pause(on) {
@@ -183,6 +232,7 @@ async function main(): Promise<void> {
     },
     loadScene(name) {
       loadScene(name);
+      settings.noteLayout(name);
       stepper.reset();
       present();
     },
@@ -190,6 +240,37 @@ async function main(): Promise<void> {
       drive.setWeather(state, seconds);
       present();
     },
+    getSettings: () => settings.get(),
+    setSlider(key, v) {
+      settings.setSlider(key, v);
+      present();
+    },
+    setSliders(partial) {
+      settings.setSliders(partial);
+      present();
+    },
+    clearSlider(key) {
+      settings.clearSlider(key);
+      present();
+    },
+    applyScene(id) {
+      settings.applyScene(id);
+      present();
+    },
+    setWeatherPreset(state) {
+      settings.setWeatherPreset(state);
+      present();
+    },
+    randomize(seed) {
+      const z = settings.randomize(seed === undefined ? Math.random : mulberry32(seed));
+      present();
+      return z;
+    },
+    resetSettings() {
+      settings.reset();
+      present();
+    },
+    sliderState: () => settings.sliderState(),
     forceStrike(o) {
       const rec = strikes.force(o);
       updateFlash();

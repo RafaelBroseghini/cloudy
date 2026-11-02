@@ -217,7 +217,7 @@ describe('mixed clouds', () => {
 })
 
 describe('type-aware scenes', () => {
-  const NEW = ['clear', 'rain', 'thunder', 'mixed'] as const
+  const NEW = ['clear', 'rain', 'thunder', 'mixed', 'lone'] as const
   const VIEWS = [
     ['390x844', 390, 844],
     ['1280x800', 1280, 800],
@@ -240,7 +240,7 @@ describe('type-aware scenes', () => {
         const n = sim.snapshot().blobs
         expect(n).toBeLessThanOrEqual(MAX_BLOBS)
         expect(sim.snapshot().clouds).toBe(spec.clouds.length)
-        expect(sim.snapshot().clouds).toBeGreaterThanOrEqual(3)
+        expect(sim.snapshot().clouds).toBeGreaterThanOrEqual(name === 'lone' ? 1 : 3)
 
         const buf = createBlobBuffer()
         sim.writeBlobs(buf)

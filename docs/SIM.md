@@ -51,6 +51,7 @@ Scene shapes (`buildLayout`): stratus is a thin lens-shaped sheet (aspect up to 
 | `rain` | 3 stratus sheets + 2 cumulus |
 | `thunder` | 2 cumulonimbus + 2 small stratus |
 | `mixed` (tornado) | 2 cumulus + 1 cumulonimbus + 2 stratus |
+| `lone` | one big cumulus (the lone-cloud scene) |
 
 ## Known gaps
 

@@ -22,7 +22,7 @@ const VOLUME_KEYS = [
 ] as const;
 const SCENERY_KEYS = [
   "farOpacity", "farTint", "farDrift", "farDensity", "midOpacity", "midTint", "midDrift", "midDensity", "nearOpacity",
-  "nearTint", "nearDrift", "nearDensity",
+  "nearTint", "nearDrift", "nearDensity", "parallaxStrength",
 ] as const;
 const POST_KEYS = ["fxExposure", "fxFlash", "fxFlashX", "fxFlashY"] as const;
 const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
@@ -118,6 +118,8 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
     u.tint.value.setRGB(BASE[name].tint.r * lit[0]!, BASE[name].tint.g * lit[1]!, BASE[name].tint.b * lit[2]!);
     u.shade.value.setRGB(BASE[name].shade.r * shade[0]!, BASE[name].shade.g * shade[1]!, BASE[name].shade.b * shade[2]!);
   }
+
+  scene.setParallaxStrength(g("parallaxStrength"));
 
   // Rain is render-only; wind slants it (the sim gets the same windX/windY for blobs through the drive).
   scene.rain.setLook(g("rainRate"), g("rainSpeed"), Math.tan(g("rainAngle")) + g("windX") * WIND_SLANT);

@@ -2,7 +2,7 @@
 // P is a flat record keyed by FieldKey; colours are three linear-RGB scalars (<name>R/G/B) so they blend per channel.
 import { PARAM_KEYS, PARAM_SPECS, TYPE_PARAM_KEYS, type ParamKey } from '../sim/params.ts'
 
-export type Group = 'interaction' | 'types' | 'sky' | 'lighting' | 'volume' | 'scenery' | 'weather' | 'postfx'
+export type Group = 'interaction' | 'types' | 'feel' | 'sky' | 'lighting' | 'volume' | 'scenery' | 'weather' | 'postfx'
 /** "linear": lerp. "step": keeps the from value until the blend ends, then takes the to value. */
 export type BlendKind = 'linear' | 'step'
 
@@ -53,6 +53,10 @@ const interactionSpecs = Object.fromEntries(
 // Defaults mirror today's uniforms in src/render/sky.ts and cloudField.ts (colours converted to linear).
 export const FIELD_SPECS = {
   ...interactionSpecs,
+  // feel: the player's squish slider. A multiplier `resolve` applies to the interaction fields (stiffness, damping, yield, split)
+  // after the weather and user layers and before the dev layer; it is not itself a sim param, so the sim never sees it.
+  /** Squishiness multiplier: below 1 firmer (stiffer, tears sooner), above 1 marshmallow (softer, stretchier). 1 changes nothing. */
+  squish: f('feel', 0.6, 1.6, 1),
   // sky
   ...rgb('sky', 'skyTop', '#4f9be0'),
   ...rgb('sky', 'skyHorizon', '#bfe3f7'),
@@ -108,6 +112,8 @@ export const FIELD_SPECS = {
   ...scenery('far', 0.5, 0.3, 0.01, 0.5),
   ...scenery('mid', 0.7, 0.2, 0.02, 0.5),
   ...scenery('near', 0.35, 0.1, 0.05, 0.3),
+  /** Scale of the parallax shift (cursor follow and idle sway) of the scenery and the rain bands: 0 = flat, 1 = today's depth. */
+  parallaxStrength: f('scenery', 0, 2, 1),
   // weather (vortexStrength is a placeholder for M4)
   rainRate: f('weather', 0, 1, 0),
   rainAngle: f('weather', -0.8, 0.8, 0),
