@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "build:pages": "tsc --noEmit -p tsconfig.json && vite build --base=/cloudy/",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview",
+    "preview:pages": "npm run build:pages && vite preview --base=/cloudy/ --host 127.0.0.1 --port 43202 --strictPort",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
