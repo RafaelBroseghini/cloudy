@@ -129,6 +129,16 @@ const STEPS = {
   // A 2 s blend back to clear: a transition at 1 s, steady clear at 2.5 s.
   clearStart: game(`g.setWeather("clear", 2); g.tick(1000); return JSON.stringify({ weather: g.getState().weather, rainRate: g.getState().rainRate })`),
   clearEnd: game(`g.tick(1500); return JSON.stringify({ weather: g.getState().weather, rainRate: g.getState().rainRate })`),
+  // Thunder: take the pointer back from the real click that unlocked audio, then thunder weather and 500 ms of steps.
+  thunderOn: game(`g.pointerAbsent(); g.setWeather("thunder", 0); g.tick(500); return JSON.stringify({ audio: g.getState().audio, weather: g.getState().weather })`),
+  // The output latency is read in the same call as the strike: Chrome moves outputLatency between reads, and the strike
+  // used the value at fire time.
+  strike: game(`const r = g.forceStrike({ intensity: 1, d: 1.0, x: 0.3 }); return JSON.stringify({ r, audio: g.getState().audio })`),
+  // Freeze the strike at its flash peak (tau 0) for the screenshot.
+  holdPeak: game(`g.holdFlash(0); return JSON.stringify(g.flash())`),
+  holdRelease: game(`g.holdFlash(null); return JSON.stringify(g.flash())`),
+  flash: game(`return JSON.stringify(g.flash())`),
+  thunderEnd: game(`g.setWeather("clear", 0); g.tick(100); return JSON.stringify(g.getState().weather)`),
   state: game(snap),
   // Real mouse path: the harness override is released, so tick reads pointer.ts / clientToWorld. Called after a real move.
   realInput: game(`
@@ -244,6 +254,36 @@ async function runPass(pass, report) {
     expect(fading.weather.kind === "transition", `a 2 s blend to clear, 1 s in, is ${JSON.stringify(fading.weather)}, not a transition`)
     const cleared = ab.json(STEPS.clearEnd)
     expect(cleared.weather.kind === "steady" && cleared.weather.state === "clear" && cleared.rainRate === 0, `after the blend to clear: ${JSON.stringify(cleared)}`)
+
+    // Thunder. Audio unlocks only from a real gesture: a click on the canvas (installUnlock listens for pointerdown).
+    ab.run("click", "canvas")
+    await sleep(500) // the clips decode once the context exists; a strike before that is skipped as not-loaded
+    const on = ab.json(STEPS.thunderOn)
+    expect(on.audio.state === "running", `audio is ${on.audio.state} after a real click on the canvas: the gesture unlock broke (pointerdown/touchend/keydown in src/audio/engine.ts)`)
+    const before = ab.json(STEPS.params)
+    const { r, audio } = ab.json(STEPS.strike)
+    expect(r.scheduledThunderAt !== null, `thunder was not scheduled: skippedReason ${r.skippedReason}`)
+    // StrikeSync: thunder is heard d after the flash peak, so it starts d - outputLatency after the peak.
+    const latency = audio.outputLatency ?? 0
+    const lead = r.scheduledThunderAt === null ? NaN : r.scheduledThunderAt - r.tStrike
+    console.log(`  thunder: scheduledThunderAt - tStrike ${lead.toFixed(4)} s (d ${r.d}, outputLatency ${audio.outputLatency} s, record latency ${r.latency} s)`)
+    expect(Math.abs(lead - (r.d - latency)) < 0.02, `thunder starts ${lead.toFixed(4)} s after the flash peak, expected d - outputLatency = ${(r.d - latency).toFixed(4)} s`)
+    const peak = ab.json(STEPS.holdPeak)
+    expect(peak > 0.5, `flash at the peak is ${peak}, expected above 0.5`)
+    await sleep(300) // a few rendered frames with the held peak, so the flash reaches the transient layer
+    shot("flash")
+    const lit = ab.json(STEPS.params)
+    const litChanged = Object.keys(before).filter((k) => before[k] !== lit[k])
+    expect(litChanged.length === 0, `the lit flash changed interaction params: ${litChanged.join(", ")}`)
+    ab.json(STEPS.holdRelease)
+    await sleep(2500) // the flash runs on the strike clock (real time); tick does not age it
+    const tail = ab.json(STEPS.flash)
+    expect(tail < 0.05, `flash 2.5 s after the peak is ${tail}, expected under 0.05`)
+    const after = ab.json(STEPS.params)
+    const changed = Object.keys(before).filter((k) => before[k] !== after[k])
+    expect(changed.length === 0, `a strike changed interaction params: ${changed.join(", ")}`)
+    seq.push(["thunder", r.d, Math.round(peak * 100) / 100])
+    ab.json(STEPS.thunderEnd)
 
     // Real mouse through pointer.ts: move the browser's own pointer to a known pixel, no override.
     const px = Math.round(pass.w / 2), py = Math.round(pass.h / 8)

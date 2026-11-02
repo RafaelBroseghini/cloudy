@@ -61,6 +61,7 @@ Drive and read state through `window.__GAME__` (`src/harness.ts`), never by scra
 - `docs/SIM.md`: how the sim maps onto Box2D, where it departs from PLAN, and every param.
 - `docs/HARNESS.md`: the full `window.__GAME__` API with a split-then-merge example.
 - `.agents/skills/verify`: browser verification (real WebGPU needs a visible window under WSLg).
+- `public/audio/`: thunder clips; every file must be CC0/public domain and credited in `CREDITS.md`.
 
 ## Keep this file small
 
