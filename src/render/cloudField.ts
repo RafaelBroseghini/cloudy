@@ -41,10 +41,15 @@ import { VIEW_HEIGHT } from "./view.ts";
 
 
 /**
- * The splat pass reads the sim's blob buffer in place: the geometry's instance attributes are two
- * interleaved views (xy+radius+mass, vx vy cloudId alive) over the same 8-float records, so the per-frame
- * cost is one bufferSubData/writeBuffer of <= MAX_BLOBS * 32 bytes. A data texture would need an
+ * The splat pass reads the sim's blob buffer in place: the geometry's instance attributes are three
+ * interleaved views (xy+radius+mass, vx vy cloudId alive, type one-hot) over the same 12-float records, so the
+ * per-frame cost is one bufferSubData/writeBuffer of <= MAX_BLOBS * 48 bytes (12 KB). A data texture would need an
  * RGBA32F upload plus a texelFetch per vertex; instanced attributes work identically on WebGPU and WebGL2.
+ *
+ * The field target carries R = density (all types, as before), G = the stratus part of that density and
+ * B = the cumulonimbus part (each blob's contribution times its one-hot type). The shade pass divides G and B by R
+ * for the local type mix, so a mixed cloud blends smoothly from one look to the other. Alpha stays 1: three's additive
+ * blending multiplies rgb by the source alpha, so anything stored there would corrupt R.
  */
 export function createSplatPass() {
   const interleaved = new InstancedInterleavedBuffer(new Float32Array(MAX_BLOBS * BLOB_STRIDE), BLOB_STRIDE, 1);
@@ -56,10 +61,12 @@ export function createSplatPass() {
   geometry.setAttribute("position", quad.getAttribute("position"));
   geometry.setAttribute("aBlobA", new InterleavedBufferAttribute(interleaved, 4, 0));
   geometry.setAttribute("aBlobB", new InterleavedBufferAttribute(interleaved, 4, 4));
+  geometry.setAttribute("aBlobC", new InterleavedBufferAttribute(interleaved, 4, 8));
   geometry.instanceCount = 0;
 
   const blobA = attribute("aBlobA", "vec4"); // x, y, radius, mass
   const blobB = attribute("aBlobB", "vec4"); // vx, vy, cloudId, alive
+  const blobC = attribute("aBlobC", "vec4"); // type one-hot: cumulus, stratus, cumulonimbus, spare
   // Read the raw attribute: positionLocal is overwritten by positionNode in the fragment stage.
   const corner = attribute("position", "vec3").xy; // -1..1 across the quad
   const reach = blobA.z.mul(INFLUENCE_FACTOR);
@@ -70,7 +77,8 @@ export function createSplatPass() {
   const falloff = max(q2.oneMinus(), 0);
   // W(q) = (1 - q^2)^3, scaled by mass * (DENSITY_REF_RADIUS / radius)^2 like blobDensity; dead slots (alive = 0) add nothing.
   const weight = blobA.w.mul(float(DENSITY_REF_RADIUS).div(blobA.z).pow(2));
-  material.fragmentNode = vec4(falloff.mul(falloff).mul(falloff).mul(weight).mul(blobB.w), 0, 0, 1);
+  const contribution = falloff.mul(falloff).mul(falloff).mul(weight).mul(blobB.w);
+  material.fragmentNode = vec4(contribution, contribution.mul(blobC.y), contribution.mul(blobC.z), 1);
   material.blending = AdditiveBlending;
   material.transparent = true;
   material.depthTest = false;
@@ -141,6 +149,38 @@ export function createCloudLook() {
     litColor: uniform(new Color("#ffffff")),
     midColor: uniform(new Color("#dfe9f6")),
     shadeColor: uniform(new Color("#9fb3d6")),
+    /**
+     * Per-type look, applied where the field's type mix says so (cumulus is the base look above, so it has no entry).
+     * Multipliers are on the base uniform of the same name; 1 = unchanged. Uniforms only, so it never recompiles.
+     */
+    stratus: {
+      /** Edge erosion and noise-driven shading: far smoother than cumulus. */
+      erosion: uniform(0.45),
+      billowShade: uniform(0.4),
+      /** Wider soft edge. */
+      softness: uniform(1.9),
+      /** Light gain: weak, so the sheet is evenly lit rather than modelled. */
+      gain: uniform(0.7),
+      /** 0..1 (not a multiplier): how far the colour goes to grey. */
+      grey: uniform(0.6),
+      /** Multiplier on coverage: a thin sheet, so the sky and rain show a little through. */
+      alpha: uniform(0.9),
+      /** Multiplier on the final colour: a dimmer, overcast sheet. */
+      tone: uniform(0.88),
+    },
+    nimbus: {
+      /** Crisper, more detailed edge. */
+      erosion: uniform(1.25),
+      softness: uniform(0.55),
+      /** Light gain and how much farther toward the light the shadow sample reaches (long shadows = deep dark body). */
+      gain: uniform(0.7),
+      reach: uniform(2.2),
+      /** 0..1 (not a multiplier): extra shade for pixels with cloud above them (toward the light): dark base, bright top. */
+      thickDark: uniform(0.9),
+      /** Multiplier on the shade colour (darker underside) and on the lit colour (brighter top). */
+      dark: uniform(0.58),
+      lit: uniform(1.12),
+    },
   };
 }
 
@@ -165,36 +205,63 @@ export function shadeClouds(
 ) {
   const field = texture(fieldTex);
   const extent = vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT);
+  const { stratus: st, nimbus: nb } = look;
 
-  // x: eroded density, y: the noise (-1..1), reused for the interior shading.
-  const density = Fn(([p]: [Node<"vec2">]) => {
-    // Render-target textures are sampled y-down on both backends (three flips them on WebGL), like screenUV.
-    const d = field.sample(p.div(extent).add(0.5).flipY()).r;
+  // Render-target textures are sampled y-down on both backends (three flips them on WebGL), like screenUV.
+  const fieldAt = (p: Node<"vec2">) => field.sample(p.div(extent).add(0.5).flipY());
+
+  // Soft-saturated, un-eroded density for lighting: interior stays flat so only real surfaces shade.
+  const body = Fn(([p]: [Node<"vec2">]) => {
+    const d = fieldAt(p).r;
+    return d.mul(-0.8).exp().oneMinus();
+  });
+
+  // 1 + fSt (kSt - 1) + fNb (kNb - 1): a per-pixel multiplier that is exactly 1 for cumulus.
+  const byType = (fSt: Node<"float">, fNb: Node<"float">, kSt: Node<"float">, kNb: Node<"float">) =>
+    fSt.mul(kSt.sub(1)).add(fNb.mul(kNb.sub(1))).add(1);
+
+  return Fn(([p]: [Node<"vec2">]) => {
+    const f = fieldAt(p);
+    const d = f.r;
+    // Local type mix: the stratus and cumulonimbus shares of the density here.
+    const inv = float(1).div(max(d, 0.02));
+    const fSt = clamp(f.g.mul(inv), 0, 1);
+    const fNb = clamp(f.b.mul(inv), 0, 1);
+
     // Noise in the air's frame, bent by a slowly evolving swirl so edges roll and billow instead of sliding.
     const q = p.sub(look.air);
     const warp = mx_fractal_noise_vec2(vec3(q.mul(look.warpScale), look.billow.mul(0.6).add(11.3)), 2, 2, 0.5).mul(look.warp);
     const n = mx_fractal_noise_float(vec3(q.add(warp).mul(look.noiseScale), look.billow), 3, 2, 0.5);
     // Multiplicative erosion keeps empty sky empty and only bites near the edges.
-    return vec2(d.mul(n.mul(look.erosion).add(1)), n);
-  });
+    const erosion = look.erosion.mul(byType(fSt, fNb, st.erosion, nb.erosion));
+    const f0 = d.mul(n.mul(erosion).add(1));
+    const soft = look.softness.mul(byType(fSt, fNb, st.softness, nb.softness));
+    const coverage = smoothstep(look.threshold.sub(soft), look.threshold.add(soft), f0);
 
-  // Soft-saturated, un-eroded density for lighting: interior stays flat so only real surfaces shade.
-  const body = Fn(([p]: [Node<"vec2">]) => {
-    const d = field.sample(p.div(extent).add(0.5).flipY()).r;
-    return d.mul(-0.8).exp().oneMinus();
-  });
-
-  return Fn(([p]: [Node<"vec2">]) => {
-    const dn = density(p);
-    const f0 = dn.x;
-    const coverage = smoothstep(look.threshold.sub(look.softness), look.threshold.add(look.softness), f0);
     // The side toward the light is denser => we are in shadow; emptier or equal => lit.
-    const diff = body(p).sub(body(p.add(look.lightOffset)));
-    const shade = smoothstep(0, 1, clamp(diff.mul(look.lightGain).negate().add(dn.y.mul(look.billowShade)), 0, 1));
+    const reach = byType(fSt, fNb, float(1), nb.reach);
+    // Longer reach goes mostly up (not up-left), so a tower's left edge is not left with a lit sliver.
+    const upPos = p.add(look.lightOffset.mul(vec2(1, reach)));
+    const upField = fieldAt(upPos);
+    const above = upField.r.mul(-0.8).exp().oneMinus();
+    const diff = body(p).sub(above);
+    const gain = look.lightGain.mul(byType(fSt, fNb, st.gain, nb.gain));
+    const billowShade = look.billowShade.mul(byType(fSt, fNb, st.billowShade, float(1)));
+    // A storm tower is dark wherever there is a lot of cloud between the pixel and the light: base and body dark, top bright.
+    // Only storm cloud above darkens a tower: a stratus sheet or cumulus higher up the screen casts no shade on it.
+    const aboveNb = clamp(upField.b.div(max(upField.r, 0.02)), 0, 1);
+    const thick = fNb.mul(nb.thickDark).mul(smoothstep(0.02, 0.75, above.mul(aboveNb)));
+    const modelled = clamp(diff.mul(gain).negate().add(n.mul(billowShade)), 0, 1);
+    // max, not a sum: a tower's interior has a positive gradient (denser than the sky above it) that would cancel the darkening.
+    const shade = smoothstep(0, 1, max(modelled, thick));
     // Thin edges read slightly lighter and bluer, like scattered sky light.
     const rim = smoothstep(look.threshold, look.threshold.mul(4), f0).oneMinus().mul(0.35);
-    const lit = mix(look.litColor, look.midColor, rim);
-    const color = mix(lit, look.shadeColor, shade);
-    return vec4(color, coverage);
+    const lit = mix(look.litColor, look.midColor, rim).mul(byType(float(0), fNb, float(1), nb.lit));
+    const dark = look.shadeColor.mul(byType(float(0), fNb, float(1), nb.dark));
+    const colored = mix(lit, dark, shade);
+    // Stratus goes grey: toward its own luminance.
+    const luma = dot(colored, vec3(0.299, 0.587, 0.114));
+    const color = mix(colored, vec3(luma), fSt.mul(st.grey)).mul(byType(fSt, float(0), st.tone, float(1)));
+    return vec4(color, coverage.mul(byType(fSt, float(0), st.alpha, float(1))));
   });
 }

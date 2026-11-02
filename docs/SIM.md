@@ -1,6 +1,6 @@
 # Cloudy sim (M1)
 
-The middle cloud layer runs on Box2D v3 (`box2d3-wasm/compat`). Blobs are dynamic circles with rotation locked. Each spring is a Box2D distance joint with its spring enabled. Per spring, `k_s` and `c` become a hertz and a damping ratio using the reduced mass `mu = m_a * m_b / (m_a + m_b)`: `hertz = sqrt(k_s / mu) / 2pi`, `ratio = c / (2 * sqrt(k_s * mu))`. The cursor is a kinematic circle whose velocity we compute each step. Blob-blob collisions are off (category masks), so blobs touch only the cursor. Breaking, relabelling, arming and merging are our rules, in `src/sim/sim.ts`.
+The middle cloud layer runs on Box2D v3 (`box2d3-wasm/compat`). Blobs are dynamic circles with rotation locked. Each spring is a Box2D distance joint with its spring enabled. Per spring (with its type multipliers, below), `k_s` and `c` become a hertz and a damping ratio using the reduced mass `mu = m_a * m_b / (m_a + m_b)`: `hertz = sqrt(k_s / mu) / 2pi`, `ratio = c / (2 * sqrt(k_s * mu))`. The cursor is a kinematic circle whose velocity we compute each step. Blob-blob collisions are off (category masks), so blobs touch only the cursor. Breaking, relabelling, arming and merging are our rules, in `src/sim/sim.ts`.
 
 ## Why Box2D
 
@@ -20,6 +20,37 @@ A spike measured Rapier 2D, Box2D v3 and a custom integrator. Only Box2D has a s
 | Wind gain (`WIND_ACCEL_GAIN` = 0.2, `src/params/drive.ts`) | Scales the weather wind acceleration on blobs. | Full gain swept every cloud to the view edge within seconds. | Uniform wind plus the breeze now wraps clouds instead of piling them at the right edge (tornado). M4's vortex replaces uniform wind. |
 | Ambient breeze (`setBreeze`, `src/sim/flow.ts`) | Every blob is dragged toward a moving air: each step adds `expm1(blobDamping * dt) * u_air` to its velocity, so a free blob settles at `u_air` in any weather. `u_air` is a prevailing drift (`breezeSpeed`, `breezeAngle`) plus the curl of a simplex-noise potential (`simplex-noise`, seeded `mulberry32`), so the turbulence is divergence-free (clouds swirl and shear, never bunch up). Eddies are 2.5x wider than tall (streaky, so clouds keep their rows) and ride with the air; the noise phase and air offset are integrated per sim step, so changing params never jumps the field. Blobs only, never the cursor. | PLAN wants wind on blobs always, and curl noise for the tornado; this builds the reusable piece now and gives clear weather life. | Breeze 0 and turbulence 0 (or `null`) leaves the sim bit-identical. Needs `blobDamping > 0`. Drift stays far under `softSpeed` (3). Shape matching resists the shear, so clouds translate and rotate more than they deform. |
 | Wrap-around (`wrapClouds`) | While a breeze with drift above 0.05 units/s is set, a cloud whose every blob (metaball extent 1.6 radii) is past the view edge downwind moves as a whole by one fixed period (view width + 7 units, longer only for a very wide cloud) to just outside the opposite edge. Positions only: velocities, springs, rest offsets and ids are kept. Only downwind exits wrap. | A drift that fights containment stalls clouds at the edge; wrapping keeps a gentle loop with the clouds' spacing intact. | A cloud off the side is not drawn, so the loop is invisible; the period (about 25 units on desktop) means a cloud is away for about a minute. Clouds wider than the seam allows land partly on screen. |
+
+## Cloud types (stratus, cumulonimbus)
+
+Every blob has one type for life: cumulus (the original, baseline), stratus or cumulonimbus. A cloud is whatever blobs it holds, so merged clouds can be mixed (merge rules are type-agnostic). Types come from the scene (`src/sim/types.ts`, `CloudSpec.type`).
+
+- Per-type multipliers (`src/sim/params.ts`, fields `stratus*` / `nimbus*`, dev panel group `types`) scale the global params, which weather still sets. Cumulus is all ones, so a cumulus-only scene is bit-identical to before (a test checks m1 with wild type values).
+- Springs between two blobs: stiffness is the harmonic mean of the two multipliers (two half-springs in series, so the softer material dominates the bond); damping, yield, creep, split and flick are the plain mean. Merge springs use the same rule. The cursor's drag sees `sum(drag_type * blob density)`; `densityAt` and the renderer keep the geometric density, so thresholds and the harness contract do not depend on type. `mass` sets the Box2D shape density (and `mass[i]`), `breeze` scales how far the air and wind move the blob.
+- Blob buffer: `BLOB_STRIDE` is 12 (was 8). Offsets 8 to 10 hold the type as a one-hot (cumulus, stratus, cumulonimbus), 11 is spare. 256 blobs upload 12 KB per frame (PLAN's limit is under 16 KB). The buffer's mass slot is the geometric area.
+
+| Multiplier | Applies to | Stratus | Cumulonimbus |
+| --- | --- | --- | --- |
+| `drag` | weight of the blob's density in cursor drag (`k_r`) | 0.45 | 2.6 |
+| `stiff` | `k_s` | 0.65 | 1.7 |
+| `damp` | `c` | 1.2 | 1.5 |
+| `yield` | `yieldStrain` | 0.55 | 1.5 |
+| `creep` | `creep` | 1.6 | 0.5 |
+| `split` | `splitStrain` | 0.7 | 2 |
+| `flick` | `flickRate` | 0.8 | 4.5 |
+| `mass` | blob mass | 0.7 | 1.8 |
+| `breeze` | air and wind response | 1.1 | 0.55 |
+
+Measured on the real scene clouds (units/s along a sweep): cumulus starts splitting at about 20, cumulonimbus at about 45 to 70 (thunder weather included), a stratus sheet tears from about 6 to 8 into 2 to 4 pieces. Stratus tearing is mostly its geometry: small blobs (short rest length) lower the absolute flick speed, and neighbour springs only (longer springs make a sheet very hard to tear).
+
+Scene shapes (`buildLayout`): stratus is an ellipse of aspect up to 6 of smaller blobs; cumulonimbus is a tall narrow column under a wider anvil (taller than wide, about 1.8:1). Compositions per weather (`sceneSpec`: `clear`, `rain`, `thunder`, `mixed`) are slot lists fitted to the view like m1; counts shrink with width, and a portrait view stacks them vertically.
+
+| Scene | Clouds (wide view) |
+| --- | --- |
+| `clear` | 3 cumulus (m1's triangle) + 1 thin stratus low left |
+| `rain` | 3 stratus sheets + 2 cumulus |
+| `thunder` | 2 cumulonimbus + 2 small stratus |
+| `mixed` (tornado) | 2 cumulus + 1 cumulonimbus + 2 stratus |
 
 ## Known gaps
 
@@ -52,3 +83,4 @@ Generated from `src/sim/params.ts`. Defaults and ranges are copied from the file
 | `k_p` | 4000 | 10 to 20000 | Cursor spring stiffness toward the pointer. |
 | `c_p` | 120 | 0 to 1000 | Cursor damper, acting on velocity relative to the pointer. |
 | `cursorMaxSpeed` | 180 | 1 to 400 | Cursor speed safety cap (units/s). |
+| `stratus*`, `nimbus*` (9 each) | see the type table | 0.1 to 5 | Per-type multipliers (above); group `types` in the dev panel. |

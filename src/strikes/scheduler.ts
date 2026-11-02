@@ -9,10 +9,15 @@ export interface StrikeEvent {
   readonly intensity: number
   /** Screen position of the strike, 0 (left) .. 1 (right). */
   readonly x: number
+  /** Screen height of the glow, 0 (bottom) .. 1 (top). A strike that starts in a cloud moves it there (see anchor.ts). */
+  readonly y: number
   /** 0..1 draws for the thunder file and its pitch. */
   readonly pick: number
   readonly pitch: number
 }
+
+/** The glow's default height: a little above the middle of the screen (what the composite always used). */
+export const FLASH_Y = 0.55
 
 export const D_MIN = 0.4
 export const D_MAX = 3
@@ -25,6 +30,7 @@ export function drawStrike(rnd: Rng): StrikeEvent {
     d: D_MIN + (D_MAX - D_MIN) * far,
     intensity: Math.min(1, Math.max(0.2, (1 - 0.6 * far) * jitter)),
     x: 0.1 + 0.8 * rnd(),
+    y: FLASH_Y,
     pick: rnd(),
     pitch: rnd(),
   }

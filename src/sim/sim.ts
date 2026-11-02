@@ -1,17 +1,18 @@
 // The CPU gameplay sim for the middle cloud layer: blobs, springs, shape matching, cursor, split and merge.
 // Box2D owns integration, spring joints and cursor contacts; this file owns the rules around them.
 
-import type { b2BodyId, b2JointId, b2WorldId } from 'box2d3-wasm/compat'
+import type { b2BodyId, b2JointId, b2ShapeId, b2WorldId } from 'box2d3-wasm/compat'
 import { BLOB, BLOB_STRIDE, MAX_BLOBS } from './blobBuffer.ts'
 import { loadBox2D, type Box2D } from './box2d.ts'
 import { stepCursor, type CursorState, type Pointer } from './cursor.ts'
 import { createFixedStepper, FIXED_DT, MAX_STEPS_PER_FRAME } from './fixedStep.ts'
 import { createFlow, type FlowParams, type Vec2 } from './flow.ts'
 import { blobDensity, influenceRadius } from './kernel.ts'
-import { clampParams, type Params } from './params.ts'
+import { clampParams, TYPE_PARAM_KEYS, typeMultsOf, type Params, type TypeMults } from './params.ts'
 import { buildLayout, sceneSpec, type SceneName, type SceneSpec } from './scene.ts'
 import { computeRestOffsets, shapeMatchNudge, type ShapeData } from './shapeMatch.ts'
 import { labelComponents, PairGate, type UnarmedPair } from './topology.ts'
+import { TYPE_INDEX } from './types.ts'
 
 /** Wind acceleration (units/s^2) at a point and time. Acts on blobs only, never on the cursor. */
 export type Wind = (x: number, y: number, t: number) => { readonly x: number; readonly y: number }
@@ -36,6 +37,9 @@ export interface SimInspect {
   step: number
   /** Cloud id per blob slot. */
   blobCloud: Int32Array
+  /** Type index per blob slot (`TYPE_INDEX`: 0 cumulus, 1 stratus, 2 cumulonimbus). */
+  blobType: Uint8Array
+  /** Inertial mass per blob slot (area times the type's mass multiplier). */
   mass: Float64Array
   springs: Array<{ a: number; b: number; L: number }>
   unarmed: UnarmedPair[]
@@ -60,8 +64,10 @@ export interface Sim {
   /** Fill the blob buffer contract; returns live blob count. */
   writeBlobs(buf: Float32Array): number
   snapshot(): SimSnapshot
-  /** Density rho(x, y) of the current blobs. */
+  /** Density rho(x, y) of the current blobs (geometric: what the renderer draws; the same for every type). */
   densityAt(x: number, y: number): number
+  /** The density the cursor drags against at a point: each blob's term weighted by its type's drag multiplier. */
+  dragDensityAt(x: number, y: number): number
   loadScene(scene: SceneName | SceneSpec, viewW: number, viewH: number): void
   /** Visible world size (view height is 10 units; width is 10 * aspect). Call on resize; loadScene also sets it. */
   setBounds(viewW: number, viewH: number): void
@@ -129,6 +135,9 @@ interface Spring {
   mu: number
 }
 
+/** The mean of one multiplier over a spring's two blobs (strain thresholds, damping, creep, flick rate). */
+type MultKey = keyof TypeMults
+
 interface Box {
   x0: number
   y0: number
@@ -166,6 +175,9 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   const vy = new Float64Array(MAX_BLOBS)
   const radius = new Float64Array(MAX_BLOBS)
   const mass = new Float64Array(MAX_BLOBS)
+  /** Geometric area (pi r^2): the density kernel and the render buffer use this, so density never depends on type. */
+  const area = new Float64Array(MAX_BLOBS)
+  const type = new Uint8Array(MAX_BLOBS)
   const cloud = new Int32Array(MAX_BLOBS)
   const qx = new Float64Array(MAX_BLOBS)
   const qy = new Float64Array(MAX_BLOBS)
@@ -178,6 +190,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   let nextCloudId = 1
   let world: b2WorldId | null = null
   let bodies: b2BodyId[] = []
+  let shapes: b2ShapeId[] = []
   let cursorBody: b2BodyId | null = null
   let springs: Spring[] = []
   let dirty = false
@@ -192,6 +205,9 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   let cursor: CursorState = { x: 0, y: 0, vx: 0, vy: 0 }
   let cursorPresent = false
   let densityAtCursor = 0
+  /** Drag-weighted density from the latest `density()` call. */
+  let lastDragRho = 0
+  let tm = typeMultsOf(params)
   const hits: number[] = []
   // Pointer velocity by finite difference, fed to the cursor's damper. Zero on the first present step.
   let prevPointer: { x: number; y: number } | null = null
@@ -203,6 +219,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     if (world) b2.b2DestroyWorld(world)
     world = null
     bodies = []
+    shapes = []
     cursorBody = null
     springs = []
   }
@@ -234,7 +251,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     c.delete()
   }
 
-  function addBody(slot: number, x: number, y: number, r: number): void {
+  function addBody(slot: number, x: number, y: number, r: number, density: number): void {
     if (!world) return
     const bd = b2.b2DefaultBodyDef()
     bd.type = b2.b2BodyType.b2_dynamicBody
@@ -246,7 +263,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     const id = b2.b2CreateBody(world, bd)
     bd.delete()
     const sd = b2.b2DefaultShapeDef()
-    sd.density = 1
+    sd.density = density
     sd.userData = slot
     // Blobs overlap each other like metaballs: they collide only with the cursor.
     sd.filter.categoryBits = CAT_BLOB
@@ -255,7 +272,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     sd.material.restitution = 0
     const c = new b2.b2Circle()
     c.radius = r
-    b2.b2CreateCircleShape(id, sd, c)
+    shapes[slot] = b2.b2CreateCircleShape(id, sd, c)
     sd.delete()
     c.delete()
     bodies[slot] = id
@@ -264,27 +281,39 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   // Box2D distance joints are soft constraints parameterised by hertz and damping ratio, not k and c.
   // For two bodies the axial effective mass is the reduced mass mu = m_a m_b / (m_a + m_b), so
   //   omega = sqrt(k_s / mu), hertz = omega / 2pi, zeta = c / (2 sqrt(k_s mu)).
-  const springHertz = (mu: number): number => Math.sqrt(params.k_s / mu) / (2 * Math.PI)
-  const springZeta = (mu: number): number => params.c / (2 * Math.sqrt(params.k_s * mu))
+  //
+  // Per-type multipliers: a spring's blobs may differ in type (merged mixed clouds, and the seam inside one). Stiffness
+  // combines as the harmonic mean, because two half-springs of stiffness ka and kb in series have 2 ka kb / (ka + kb): the
+  // softer material dominates the bond. Everything else (damping, strain thresholds, creep, flick rate) is the plain mean.
+  // Cumulus-cumulus is exactly 1 for each, so a cumulus-only scene is bit-identical to one with no types.
+  const pairMean = (a: number, b: number, key: MultKey): number => ((tm[type[a] ?? 0] as TypeMults)[key] + (tm[type[b] ?? 0] as TypeMults)[key]) / 2
+  const pairStiff = (a: number, b: number): number => {
+    const ka = (tm[type[a] ?? 0] as TypeMults).stiff
+    const kb = (tm[type[b] ?? 0] as TypeMults).stiff
+    return (2 * ka * kb) / (ka + kb)
+  }
+  const springK = (a: number, b: number): number => params.k_s * pairStiff(a, b)
+  const springC = (a: number, b: number): number => params.c * pairMean(a, b, 'damp')
+  const springMu = (a: number, b: number): number => ((mass[a] ?? 1) * (mass[b] ?? 1)) / ((mass[a] ?? 1) + (mass[b] ?? 1))
+  const springHertz = (s: Spring): number => Math.sqrt(springK(s.a, s.b) / s.mu) / (2 * Math.PI)
+  const springZeta = (s: Spring): number => springC(s.a, s.b) / (2 * Math.sqrt(springK(s.a, s.b) * s.mu))
 
   function addSpring(a: number, b: number, L: number): void {
     if (!world) return
-    const ma = mass[a] ?? 1
-    const mb = mass[b] ?? 1
-    const mu = (ma * mb) / (ma + mb)
+    const spring: Spring = { a, b, L, joint: null as unknown as b2JointId, mu: springMu(a, b) }
     const jd = b2.b2DefaultDistanceJointDef()
     jd.base.bodyIdA = bodies[a] as b2BodyId
     jd.base.bodyIdB = bodies[b] as b2BodyId
     jd.length = L
     jd.enableSpring = true
-    jd.hertz = springHertz(mu)
-    jd.dampingRatio = springZeta(mu)
+    jd.hertz = springHertz(spring)
+    jd.dampingRatio = springZeta(spring)
     jd.enableLimit = false
     jd.minLength = 0.01
     jd.maxLength = 1e6
-    const joint = b2.b2CreateDistanceJoint(world, jd)
+    spring.joint = b2.b2CreateDistanceJoint(world, jd)
     jd.delete()
-    springs.push({ a, b, L, joint, mu })
+    springs.push(spring)
   }
 
   // ---- State refresh --------------------------------------------------------------------------------
@@ -337,6 +366,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   // Per-blob queries for touch detection cost ~17 us each through the wasm callback boundary, so cloud-pair
   // checks use a JS bounding-box cull and exact distances instead (see gapBetween).
   function density(x: number, y: number): number {
+    lastDragRho = 0
     if (n === 0 || !world) return 0
     const h = influenceRadius(MAX_BLOB_RADIUS)
     aabb.lowerBound.x = x - h
@@ -351,9 +381,13 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     // Sum in slot order so the result does not depend on broadphase tree order.
     hits.sort((p, q) => p - q)
     let rho = 0
+    let drag = 0
     for (const i of hits) {
-      rho += blobDensity(mass[i] ?? 0, Math.hypot(x - (px[i] ?? 0), y - (py[i] ?? 0)), radius[i] ?? 1)
+      const term = blobDensity(area[i] ?? 0, Math.hypot(x - (px[i] ?? 0), y - (py[i] ?? 0)), radius[i] ?? 1)
+      rho += term
+      drag += (tm[type[i] ?? 0] as TypeMults).drag * term
     }
+    lastDragRho = drag
     return rho
   }
 
@@ -372,9 +406,9 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       const bx = px[s.b] ?? 0
       const by = py[s.b] ?? 0
       const d = Math.hypot(ax - bx, ay - by)
-      let limit = params.splitStrain
+      let limit = params.splitStrain * pairMean(s.a, s.b, 'split')
       // Speed per rest length, so small (portrait) clouds tear at proportionally lower cursor speeds.
-      const t = Math.min(1, Math.max(0, speed / s.L / params.flickRate - 1))
+      const t = Math.min(1, Math.max(0, speed / s.L / (params.flickRate * pairMean(s.a, s.b, 'flick')) - 1))
       if (t > 0 && segmentDistance(cursor.x, cursor.y, ax, ay, bx, by) < reach) limit *= 1 - t * (1 - params.flickCut)
       if ((d - s.L) / s.L > limit) (broken ??= new Set()).add(s)
     }
@@ -389,8 +423,8 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       }
       const d = Math.hypot((px[s.a] ?? 0) - (px[s.b] ?? 0), (py[s.a] ?? 0) - (py[s.b] ?? 0))
       const strain = (d - s.L) / s.L
-      if (Math.abs(strain) > params.yieldStrain) {
-        s.L = Math.max(MIN_REST, s.L + params.creep * (d - s.L))
+      if (Math.abs(strain) > params.yieldStrain * pairMean(s.a, s.b, 'yield')) {
+        s.L = Math.max(MIN_REST, s.L + params.creep * pairMean(s.a, s.b, 'creep') * (d - s.L))
         b2.b2DistanceJoint_SetRestLength(s.joint, s.L)
       }
       springs[w++] = s
@@ -615,8 +649,10 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     if (g === 0) return
     for (let i = 0; i < n; i++) {
       flow.sample(px[i] ?? 0, py[i] ?? 0, air)
-      dvx[i] = (dvx[i] ?? 0) + g * air.x
-      dvy[i] = (dvy[i] ?? 0) + g * air.y
+      // A heavy type responds less: its free terminal speed is breeze * air (the damping term is unchanged).
+      const bm = (tm[type[i] ?? 0] as TypeMults).breeze
+      dvx[i] = (dvx[i] ?? 0) + g * bm * air.x
+      dvy[i] = (dvy[i] ?? 0) + g * bm * air.y
     }
   }
 
@@ -700,7 +736,8 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
 
     if (cursorPresent) {
       densityAtCursor = density(cursor.x, cursor.y)
-      cursor = stepCursor(cursor, pointer, pointerVel(), params, densityAtCursor, FIXED_DT)
+      // The drag sees each blob's density weighted by its type; the reported/rendered density stays geometric.
+      cursor = stepCursor(cursor, pointer, pointerVel(), params, lastDragRho, FIXED_DT)
       // Drive the kinematic body by velocity so contacts push blobs; Box2D moves it by v dt during the step.
       vec.x = cursor.vx
       vec.y = cursor.vy
@@ -714,8 +751,9 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       const t = step * FIXED_DT
       for (let i = 0; i < n; i++) {
         const w = wind(px[i] ?? 0, py[i] ?? 0, t)
-        dvx[i] = (dvx[i] ?? 0) + w.x * FIXED_DT
-        dvy[i] = (dvy[i] ?? 0) + w.y * FIXED_DT
+        const bm = (tm[type[i] ?? 0] as TypeMults).breeze
+        dvx[i] = (dvx[i] ?? 0) + w.x * FIXED_DT * bm
+        dvy[i] = (dvy[i] ?? 0) + w.y * FIXED_DT * bm
       }
     }
     if (breeze) applyBreeze()
@@ -772,9 +810,12 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       vx[i] = 0
       vy[i] = 0
       radius[i] = Math.min(MAX_BLOB_RADIUS, Math.max(MIN_BLOB_RADIUS, b.radius))
-      mass[i] = Math.PI * (radius[i] ?? 0) ** 2
+      area[i] = Math.PI * (radius[i] ?? 0) ** 2
+      type[i] = TYPE_INDEX[b.type]
+      const massMult = (tm[type[i] ?? 0] as TypeMults).mass
+      mass[i] = (area[i] ?? 0) * massMult
       cloud[i] = b.cloud + 1
-      addBody(i, b.x, b.y, radius[i] ?? 0)
+      addBody(i, b.x, b.y, radius[i] ?? 0, massMult)
     })
     for (const [a, b] of layout.springs) {
       addSpring(a, b, Math.hypot((px[a] ?? 0) - (px[b] ?? 0), (py[a] ?? 0) - (py[b] ?? 0)))
@@ -787,10 +828,22 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
   function setParams(partial: Partial<Params>): void {
     const prev = params
     params = clampParams(partial, params)
-    if (params.k_s !== prev.k_s || params.c !== prev.c) {
+    const typesChanged = TYPE_PARAM_KEYS.some((k) => params[k] !== prev[k])
+    if (typesChanged) {
+      tm = typeMultsOf(params)
+      // Mass is physical: the Box2D shape density follows, so mass[i] stays equal to the body's mass.
+      for (let i = 0; i < n; i++) {
+        const m = (tm[type[i] ?? 0] as TypeMults).mass
+        if (mass[i] === (area[i] ?? 0) * m) continue
+        mass[i] = (area[i] ?? 0) * m
+        b2.b2Shape_SetDensity(shapes[i] as b2ShapeId, m, true)
+      }
+      for (const s of springs) s.mu = springMu(s.a, s.b)
+    }
+    if (typesChanged || params.k_s !== prev.k_s || params.c !== prev.c) {
       for (const s of springs) {
-        b2.b2DistanceJoint_SetSpringHertz(s.joint, springHertz(s.mu))
-        b2.b2DistanceJoint_SetSpringDampingRatio(s.joint, springZeta(s.mu))
+        b2.b2DistanceJoint_SetSpringHertz(s.joint, springHertz(s))
+        b2.b2DistanceJoint_SetSpringDampingRatio(s.joint, springZeta(s))
       }
     }
     if (params.blobDamping !== prev.blobDamping) {
@@ -804,7 +857,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     let spring = 0
     for (const s of springs) {
       const d = Math.hypot((px[s.a] ?? 0) - (px[s.b] ?? 0), (py[s.a] ?? 0) - (py[s.b] ?? 0))
-      spring += 0.5 * params.k_s * (d - s.L) ** 2
+      spring += 0.5 * springK(s.a, s.b) * (d - s.L) ** 2
     }
     let sm = 0
     dvx.fill(0, 0, n)
@@ -839,11 +892,16 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
         buf[o + BLOB.x] = px[i] ?? 0
         buf[o + BLOB.y] = py[i] ?? 0
         buf[o + BLOB.radius] = radius[i] ?? 0
-        buf[o + BLOB.mass] = mass[i] ?? 0
+        buf[o + BLOB.mass] = area[i] ?? 0
         buf[o + BLOB.vx] = vx[i] ?? 0
         buf[o + BLOB.vy] = vy[i] ?? 0
         buf[o + BLOB.cloudId] = cloud[i] ?? 0
         buf[o + BLOB.alive] = 1
+        const t = type[i] ?? 0
+        buf[o + BLOB.typeCumulus] = t === 0 ? 1 : 0
+        buf[o + BLOB.typeStratus] = t === 1 ? 1 : 0
+        buf[o + BLOB.typeNimbus] = t === 2 ? 1 : 0
+        buf[o + BLOB.spare] = 0
       }
       buf.fill(0, count * BLOB_STRIDE)
       return count
@@ -859,6 +917,10 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       }
     },
     densityAt: density,
+    dragDensityAt(x, y) {
+      density(x, y)
+      return lastDragRho
+    },
     loadScene,
     setBounds,
     setParams,
@@ -867,6 +929,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
       return {
         step,
         blobCloud: cloud.slice(0, n),
+        blobType: type.slice(0, n),
         mass: mass.slice(0, n),
         springs: springs.map((s) => ({ a: s.a, b: s.b, L: s.L })),
         unarmed: gate.list(),

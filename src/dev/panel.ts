@@ -55,8 +55,9 @@ export function createDevPanel(host: DevHost): DevPanel {
   gui.add(ui, 'seconds', 0, 20, 0.5).name('transition s')
   gui.add({ go: () => api.setWeather(ui.weather, ui.seconds) }, 'go').name('go (blend to weather)')
   gui.add({ f: () => api.forceStrike() }, 'f').name('force strike')
-  gui.add({ f: () => api.loadScene('m1') }, 'f').name('load scene m1')
-  gui.add({ f: () => api.loadScene('empty') }, 'f').name('load scene empty')
+  for (const name of ['m1', 'clear', 'rain', 'thunder', 'mixed', 'empty'] as const) {
+    gui.add({ f: () => api.loadScene(name) }, 'f').name(`load scene ${name}`)
+  }
   const pauseCtrl = gui.add({ f: () => api.pause(!api.getState().paused) }, 'f').name('pause')
   gui.add(
     {

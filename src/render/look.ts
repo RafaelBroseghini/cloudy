@@ -20,7 +20,7 @@ const SCENERY_KEYS = [
   "farOpacity", "farTint", "farDrift", "farDensity", "midOpacity", "midTint", "midDrift", "midDensity", "nearOpacity",
   "nearTint", "nearDrift", "nearDensity",
 ] as const;
-const POST_KEYS = ["fxExposure", "fxFlash", "fxFlashX"] as const;
+const POST_KEYS = ["fxExposure", "fxFlash", "fxFlashX", "fxFlashY"] as const;
 const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
 const BREEZE_KEYS = ["breezeSpeed", "breezeAngle"] as const;
 
@@ -100,4 +100,5 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
   post.exposure.value = g("fxExposure");
   post.flash.value = g("fxFlash");
   post.flashX.value = g("fxFlashX");
+  post.flashY.value = g("fxFlashY");
 }

@@ -1,6 +1,6 @@
 import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
-import { BLOB, BLOB_STRIDE, type Params, type SceneName } from "./sim/index.ts";
+import { CLOUD_TYPES, summarizeClouds, type CloudType, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
   ready: boolean;
@@ -11,6 +11,8 @@ export interface GameState {
   step: number;
   paused: boolean;
   clouds: number;
+  /** Clouds by dominant type (a mixed cloud counts once, as the type most of its blobs have). Sums to `clouds`. */
+  types: Record<CloudType, number>;
   blobs: number;
   springs: number;
   /** The sim cursor (what is drawn), in world units. */
@@ -33,6 +35,8 @@ export interface CloudCentre {
   x: number;
   y: number;
   blobs: number;
+  /** Dominant type: the type most of the cloud's blobs have. */
+  type: CloudType;
 }
 
 export interface GameHarnessApi {
@@ -49,6 +53,7 @@ export interface GameHarnessApi {
   pointerRelease(): void;
   /** Move the overridden pointer linearly over `seconds` of fixed steps, stepping the sim. Leaves the pointer at the end point. */
   drag(x0: number, y0: number, x1: number, y1: number, seconds: number): void;
+  /** `"m1" | "empty" | "clear" | "rain" | "thunder" | "mixed"`: the last four are compositions of cumulus, stratus and cumulonimbus. */
   loadScene(name: SceneName): void;
   /** Blend to `state` over `seconds` of weather time (0 = at once). Weather time advances with sim steps. */
   setWeather(state: WeatherState, seconds: number): void;
@@ -90,22 +95,14 @@ export function parseBackendParam(search: string): boolean {
   return new URLSearchParams(search).get("backend") === "webgl";
 }
 
-/** Mass-weighted centre of each live cloud in a blob buffer, ordered by id. */
+/** Mass-weighted centre, blob count and dominant type of each live cloud in a blob buffer, ordered by id. */
 export function cloudCentresFromBuffer(buf: Float32Array, count: number): CloudCentre[] {
-  const acc = new Map<number, { sx: number; sy: number; m: number; n: number }>();
-  for (let i = 0; i < count; i++) {
-    const o = i * BLOB_STRIDE;
-    if ((buf[o + BLOB.alive] ?? 0) === 0) continue;
-    const id = buf[o + BLOB.cloudId] ?? 0;
-    const m = buf[o + BLOB.mass] ?? 1;
-    const a = acc.get(id) ?? { sx: 0, sy: 0, m: 0, n: 0 };
-    a.sx += (buf[o + BLOB.x] ?? 0) * m;
-    a.sy += (buf[o + BLOB.y] ?? 0) * m;
-    a.m += m;
-    a.n += 1;
-    acc.set(id, a);
-  }
-  return [...acc]
-    .map(([id, a]) => ({ id, x: a.sx / a.m, y: a.sy / a.m, blobs: a.n }))
-    .sort((p, q) => p.id - q.id);
+  return summarizeClouds(buf, count).map(({ id, x, y, blobs, type }) => ({ id, x, y, blobs, type }));
+}
+
+/** Clouds per dominant type. */
+export function typeCounts(buf: Float32Array, count: number): Record<CloudType, number> {
+  const out = Object.fromEntries(CLOUD_TYPES.map((t) => [t, 0])) as Record<CloudType, number>;
+  for (const c of summarizeClouds(buf, count)) out[c.type] += 1;
+  return out;
 }

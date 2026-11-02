@@ -1,6 +1,6 @@
 // The strike record: one object feeds the flash and the thunder, so they cannot drift apart.
 import { STRIKE_LEAD, flashEnvelope, FULL_SHAPE, type FlashShape } from './envelope.ts'
-import type { StrikeEvent } from './scheduler.ts'
+import { FLASH_Y, type StrikeEvent } from './scheduler.ts'
 import type { ClockDomain, Clocks } from './sync.ts'
 
 export interface Strike extends StrikeEvent {
@@ -27,9 +27,11 @@ export interface FlashState {
   readonly value: number
   /** Screen x (0..1) of the strongest active strike. */
   readonly x: number
+  /** Screen y (0 bottom .. 1 top) of its glow. */
+  readonly y: number
 }
 
-export const NO_FLASH: FlashState = { value: 0, x: 0.5 }
+export const NO_FLASH: FlashState = { value: 0, x: 0.5, y: FLASH_Y }
 
 /** Strongest `intensity * E(tau)` over the strikes (flashes do not stack past 1). */
 export function flashAt(strikes: readonly Strike[], now: Clocks, shape: FlashShape = FULL_SHAPE): FlashState {
@@ -38,7 +40,7 @@ export function flashAt(strikes: readonly Strike[], now: Clocks, shape: FlashSha
     const tau = strikeTau(s, now)
     if (tau === null) continue
     const v = s.intensity * flashEnvelope(tau, shape)
-    if (v > best.value) best = { value: v, x: s.x }
+    if (v > best.value) best = { value: v, x: s.x, y: s.y }
   }
   return best
 }

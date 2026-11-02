@@ -60,7 +60,7 @@ Weather may change gate values but never disables merging, and `d_touch < d_rele
 3. Resolve P (slider changes, transitions).
 4. Fixed sim steps: sample density, cursor forces, blob step, topology + merge gate.
 5. Strikes: read audio time, schedule thunder, compute flash.
-6. Upload blob data texture (8 floats per blob) and uniforms.
+6. Upload blob data (12 floats per blob: position, size, motion, cloud id, type one-hot) and uniforms.
 7. GPU: sky + scenery, metaball splats (half-res field), cloud shading, rain/debris, composite.
 8. Govern: frame-time stats; step quality tier with hysteresis.
 

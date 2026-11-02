@@ -3,6 +3,7 @@
 import { PARAM_KEYS, type Params } from '../sim/params.ts'
 import type { FlowParams } from '../sim/flow.ts'
 import type { Wind } from '../sim/sim.ts'
+import type { SceneName } from '../sim/scene.ts'
 import { FIELD_KEYS, clampField, type FieldKey, type Layer } from './fields.ts'
 import { interactionOf, resolve, type Layers, type P } from './resolve.ts'
 import { advanceWeather, startTransition, steady, type Weather, type WeatherState } from './weather.ts'
@@ -175,6 +176,14 @@ export function reportWeather(w: Weather): WeatherReport {
   return w.kind === 'steady'
     ? { kind: 'steady', state: w.state, progress: 1 }
     : { kind: 'transition', from: w.from, to: w.to, progress: w.progress }
+}
+
+/**
+ * The scene the game opens with for a weather: its cloud mix (clear = cumulus and a thin stratus, rain = stratus sheets,
+ * thunder = storm towers, tornado = a bit of everything). Switching weather later does not respawn clouds.
+ */
+export function sceneForWeather(w: WeatherState): SceneName {
+  return w === 'tornado' ? 'mixed' : w
 }
 
 export function parseWeatherParam(search: string): WeatherState {

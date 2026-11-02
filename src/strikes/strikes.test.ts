@@ -221,7 +221,7 @@ describe('StrikeLeavesSimUnchanged', () => {
           expect(interactionOf(withStrike)).toEqual(interactionOf(base))
           // Stronger: every field outside the post-FX flash pair is untouched.
           for (const k of Object.keys(base) as (keyof typeof base)[]) {
-            if (k !== 'fxFlash' && k !== 'fxFlashX') expect(withStrike[k]).toBe(base[k])
+            if (k !== 'fxFlash' && k !== 'fxFlashX' && k !== 'fxFlashY') expect(withStrike[k]).toBe(base[k])
           }
         }
       }),
@@ -238,7 +238,7 @@ describe('StrikeLeavesSimUnchanged', () => {
     const sink = { setParams: (p: Params) => void calls.push(p), setWind: () => {} }
     const run = createDriveRunner(sink, {}, 'thunder')
     const n = calls.length
-    for (let i = 0; i < 20; i++) run.setLayers({ transient: flashLayer({ value: i / 20, x: 0.3 }) })
+    for (let i = 0; i < 20; i++) run.setLayers({ transient: flashLayer({ value: i / 20, x: 0.3, y: 0.55 }) })
     for (let i = 0; i < 20; i++) run.step(FIXED_DT)
     expect(calls.length).toBe(n)
   })

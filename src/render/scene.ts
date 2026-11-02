@@ -36,8 +36,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   const cursorActive = uniform(0);
   const cursorRadius = uniform(0.45);
 
-  /** Post grade: `exposure` scales the scene colour; `flash` (0..1) and `flashX` (screen x, 0..1) are the lightning (M3). */
-  const post = { exposure: uniform(1), flash: uniform(0), flashX: uniform(0.5) };
+  /** Post grade: `exposure` scales the scene colour; `flash` (0..1) and `flashX` / `flashY` (screen position of the glow, 0..1) are the lightning (M3). */
+  const post = { exposure: uniform(1), flash: uniform(0), flashX: uniform(0.5), flashY: uniform(0.55) };
   // Cool white-blue, a touch brighter than the sky so the lift reads as light, not as a grey wash.
   const flashTint = vec3(0.78, 0.88, 1.0);
 
@@ -72,7 +72,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     // Lightning: a soft pool of light around the strike x (wide, centred a little above the middle), a gentle lift
     // everywhere else. Sky and scenery brighten; the play clouds are lit from inside, including their dark undersides.
     const gx = uvUp.x.sub(post.flashX).mul(aspect);
-    const gy = uvUp.y.sub(0.55);
+    const gy = uvUp.y.sub(post.flashY);
     const pool = exp(gx.mul(gx).div(0.2).add(gy.mul(gy).div(0.35)).negate());
     const behindPlay = behindPlay0.mul(post.flash.mul(0.3).add(1)).add(flashTint.mul(post.flash.mul(pool.mul(0.3).add(0.05))));
     const c = clouds(wp);
@@ -119,7 +119,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     layers: scenery.layers,
     /** Rain streak uniforms and look; see rain.ts. Render-only. */
     rain,
-    /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1), `flashX` (0..1 screen x of the glow). */
+    /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1), `flashX` / `flashY` (0..1 screen position of the glow). */
     post,
     /** Current scenery parallax shift in world units (the play layer ignores it). */
     parallax: scenery.parallax.value,

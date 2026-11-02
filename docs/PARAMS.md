@@ -17,12 +17,13 @@ The backtick key or `?dev` opens a lil-gui panel (0.21.0, loaded by dynamic impo
 
 ## Field groups (`FIELD_SPECS`: group, kind, min, max, default)
 
-- `interaction`: the sim's `PARAM_SPECS`, unchanged.
+- `interaction`: the sim's `PARAM_SPECS` except the per-type multipliers.
+- `types`: `stratus{Drag,Stiff,Damp,Yield,Creep,Split,Flick,Mass,Breeze}` and the same `nimbus*` (0.1 to 5; values in `docs/SIM.md`). They are sim params like the rest (`interactionOf`, `sim.setParams`); weather scales the base and these multiply on top. Cumulus has none (it is the base).
 - `sky`: `skyTop/Horizon/Bottom/Sun{R,G,B}` (linear RGB), horizon height, sun x/y/size/strength.
 - `lighting`: `lightDirX/Y`, `lightGain`, `lightAmbient`, `cloudLit/Mid/Shade{R,G,B}`.
 - `scenery`: `far`, `mid`, `near` x `Opacity|Tint|Drift|Density`. Render-only.
 - `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (strikes per second, mean), `strikesEnabled` (step), and the breeze below.
-- `postfx`: `fxExposure`, `fxFlash` (0), `fxFlashX` (0.5: screen x of the flash glow).
+- `postfx`: `fxExposure`, `fxFlash` (0), `fxFlashX` (0.5: screen x of the flash glow), `fxFlashY` (0.55: its screen height, 0 bottom).
 
 Defaults match today's `sky.ts` / `cloudField.ts` uniforms (hex converted to linear RGB).
 
@@ -68,6 +69,7 @@ sim.step()
 // per rendered frame, only when P changed: applyLook(scene, P)  (uniforms; rain slant/rate included)
 ```
 
+- Opening scene: `sceneForWeather` (clear to `clear`, rain to `rain`, thunder to `thunder`, tornado to `mixed`) picks the scene `main.ts` loads for the initial weather. Changing weather later never respawns clouds.
 - Wind: blob acceleration is `WIND_ACCEL_GAIN (0.2) * windX|windY`, uniform for now. It goes to `sim.setWind`, which acts on blobs only; the cursor equation has no wind input. Uniform wind leans every cloud toward one view edge, so in tornado they pile up and merge after about a minute. M4 replaces it with the vortex plus curl noise.
 - Rain: `windX` also slants the streaks: `tan(angle) = tan(rainAngle) + 0.12 * windX`.
 - Transitions: `setDriveWeather` (harness `setWeather`, keys 1..4 use 4 s). Layers (`setDriveLayers`) swap scene/user/transient for M3/M5.
@@ -88,6 +90,10 @@ Stateless analytic streaks in the composite shader: no particles, no compute, no
 
 Play clouds: the erosion noise is sampled in the air's frame (`scene.setAir(sim.flowState())`, so it stays put on a drifting cloud), bent by a slow 2-octave domain warp, and evolves along a CPU-integrated phase (`look.billow`, `billowRate` 0.1/s, 0.15x under `prefers-reduced-motion`); the same noise nudges the interior shading (`billowShade`). Scenery: each layer's noise `evolve` rate is 0.04 / 0.07 / 0.10 per second (far, mid, near), so layers morph as well as translate; reduced motion scales drift and evolution to 0.2x. The sim's breeze is not scaled by reduced motion.
 
+## Cloud types in the renderer (render-only, uniforms only)
+
+The splat pass writes R = density, G = the stratus part, B = the cumulonimbus part of it (each blob's contribution times its type one-hot, alpha stays 1). The shade pass divides G and B by R for the local type mix, so a mixed cloud blends smoothly; cumulus-only pixels see multipliers of exactly 1. Per-type uniforms live in `createCloudLook()` (`look.stratus`, `look.nimbus`, `src/render/cloudField.ts`) and ride on the weather's cloud colours. Stratus: erosion x0.45, billow shading x0.4, soft edge x1.9, light gain x0.7, 60% toward grey, coverage x0.9, colour x0.88. Cumulonimbus: erosion x1.25, edge x0.55 (crisp), light gain x0.7, a longer shadow reach (x2.2, mostly upward) and a darkening where there is storm cloud above the pixel (up to 0.9, only cumulonimbus casts it), shade colour x0.58, lit colour x1.12: a dark base under a bright anvil.
+
 ## Look tuning (rain, thunder, tornado)
 
 The play clouds keep contrast by making the sky darker than their lit tops (`cloudLit` near white, `lightGain` 3.4-3.6, dark `cloudShade` undersides), while scenery banks get hazier: lower `*Opacity`, higher `*Tint` (blend toward the sky horizon colour).
@@ -96,6 +102,7 @@ The play clouds keep contrast by making the sky darker than their lit tops (`clo
 
 One strike record `{ id, tStrike, clock, intensity, d, x, pick, pitch }` feeds the flash and the thunder.
 
+- Anchoring: lightning starts in the storm towers. When a cumulonimbus (dominant type) is on screen, a scheduled strike, or a forced one without an explicit `x`, moves into the middle 60% of one's width (`src/strikes/anchor.ts`; the tower is chosen by the strike's `pick` draw, the position by its own `x` draw, so no extra rng draws and the replay is unchanged) and the glow (`fxFlashY`) goes 40% up its height. No tower on screen: today's behaviour. Wired by the director's `anchors` port, fed from the blob buffer in `main.ts`.
 - Scheduler: seeded, stepped once per fixed sim step with the resolved `strikesEnabled` / `strikeRate`. A strike fires when the integral of `strikeRate` reaches `0.35 + Exp(0.65)` (mean gap `1 / strikeRate`, never under `0.35 / strikeRate`). Disabled or rate 0: none. `d` 0.4..3 s, softer when longer; `x` 0.1..0.9.
 - Clocks: the strike lives on the AudioContext render clock R while the context is running, else on `performance.now()` (flash only, thunder skipped as `locked`). R is `getOutputTimestamp()` (the heard clock: `contextTime + (perf - performanceTime)`) plus `outputLatency` (else `baseLatency`, else 0), because that timestamp names the sample leaving the speaker now; without `getOutputTimestamp` it is `currentTime` plus the time since it last ticked. `tStrike` = R now + 0.1 s.
 - Timing: the flash PEAK is `tStrike`. Thunder starts at `tStrike + d - latency` and is heard at `tStrike + d`, so heard minus flash peak is `d` for any latency. A start before `max(R, currentTime)` or a heard time already past is skipped (`late`); never played late.

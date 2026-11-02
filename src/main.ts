@@ -1,8 +1,8 @@
 import { createAudioEngine, installUnlock } from "./audio/engine.ts";
 import { installDevPanel, isTypingTarget } from "./dev/toggle.ts";
 import { createPointerInput } from "./input/pointer.ts";
-import { createDriveRunner, parseWeatherParam, reportWeather, WEATHER_STATES } from "./params/index.ts";
-import { flashLayer, createStrikeDirector } from "./strikes/index.ts";
+import { createDriveRunner, parseWeatherParam, reportWeather, sceneForWeather, WEATHER_STATES } from "./params/index.ts";
+import { flashLayer, createStrikeDirector, nimbusAnchors } from "./strikes/index.ts";
 import { applyLook } from "./render/look.ts";
 import { createRenderer } from "./render/renderer.ts";
 import { createScene } from "./render/scene.ts";
@@ -10,10 +10,11 @@ import { VIEW_HEIGHT, viewWidth } from "./render/view.ts";
 import {
   cloudCentresFromBuffer,
   installHarness,
+  typeCounts,
   parseBackendParam,
   type GameHarnessApi,
 } from "./harness.ts";
-import { CLOUD_THRESHOLD, createBlobBuffer, createSim, INFLUENCE_FACTOR, FIXED_DT, type Pointer, type SceneName } from "./sim/index.ts";
+import { CLOUD_THRESHOLD, createBlobBuffer, createSim, INFLUENCE_FACTOR, FIXED_DT, summarizeClouds, type Pointer, type SceneName } from "./sim/index.ts";
 import { createFixedStepper } from "./sim/fixedStep.ts";
 
 /** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
@@ -45,7 +46,9 @@ async function main(): Promise<void> {
   const loadScene = (name: SceneName): void => {
     sim.loadScene(name, viewWidth(window.innerWidth / window.innerHeight), VIEW_HEIGHT);
   };
-  loadScene("m1");
+  // The opening scene matches the weather it opens in; switching weather later does not respawn clouds.
+  const initialWeather = parseWeatherParam(location.search);
+  loadScene(sceneForWeather(initialWeather));
 
   // Resize refits the camera, field and containment rect; clouds keep their world positions (no scene reload).
   const fitView = (): void => {
@@ -56,7 +59,7 @@ async function main(): Promise<void> {
   fitView();
 
   // Weather: the drive resolves P (defaults + scene + weather) and pushes interaction params and wind to the sim.
-  const drive = createDriveRunner(sim, {}, parseWeatherParam(location.search));
+  const drive = createDriveRunner(sim, {}, initialWeather);
 
   // Lightning: one strike record feeds the flash (transient layer, post-FX only) and the thunder (Web Audio).
   const audio = createAudioEngine(import.meta.env.BASE_URL);
@@ -68,6 +71,8 @@ async function main(): Promise<void> {
     currentTime: audio.currentTime,
     thunder: audio.thunder,
     reducedMotion: () => reducedMotion.matches,
+    // Lightning starts in the storm towers on screen (none on screen: the strike keeps its own x).
+    anchors: () => nimbusAnchors(summarizeClouds(blobs, sim.writeBlobs(blobs)), viewWidth(window.innerWidth / window.innerHeight), VIEW_HEIGHT),
   });
   let flashValue = 0;
   let flashX = 0.5;
@@ -136,6 +141,7 @@ async function main(): Promise<void> {
         step: s.step,
         paused,
         clouds: s.clouds,
+        types: typeCounts(blobs, sim.writeBlobs(blobs)),
         blobs: s.blobs,
         springs: s.springs,
         cursor: { x: s.cursor.x, y: s.cursor.y, present: s.cursor.present },

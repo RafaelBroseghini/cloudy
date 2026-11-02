@@ -1,8 +1,8 @@
 // One spec table for every blendable field: group, blend kind, range, default.
 // P is a flat record keyed by FieldKey; colours are three linear-RGB scalars (<name>R/G/B) so they blend per channel.
-import { PARAM_KEYS, PARAM_SPECS, type ParamKey } from '../sim/params.ts'
+import { PARAM_KEYS, PARAM_SPECS, TYPE_PARAM_KEYS, type ParamKey } from '../sim/params.ts'
 
-export type Group = 'interaction' | 'sky' | 'lighting' | 'scenery' | 'weather' | 'postfx'
+export type Group = 'interaction' | 'types' | 'sky' | 'lighting' | 'scenery' | 'weather' | 'postfx'
 /** "linear": lerp. "step": keeps the from value until the blend ends, then takes the to value. */
 export type BlendKind = 'linear' | 'step'
 
@@ -44,10 +44,11 @@ function scenery<P extends string>(prefix: P, opacity: number, tint: number, dri
   } as Scenery<P>
 }
 
-const interactionSpecs = Object.fromEntries(PARAM_KEYS.map((k) => [k, { group: 'interaction', kind: 'linear', ...PARAM_SPECS[k] }])) as Record<
-  ParamKey,
-  FieldSpec<'interaction'>
->
+// The sim's params, all of them: the per-type multipliers get their own panel group, the rest are "interaction".
+const typeKeys = new Set<string>(TYPE_PARAM_KEYS)
+const interactionSpecs = Object.fromEntries(
+  PARAM_KEYS.map((k) => [k, { group: typeKeys.has(k) ? 'types' : 'interaction', kind: 'linear', ...PARAM_SPECS[k] }]),
+) as Record<ParamKey, FieldSpec<'interaction' | 'types'>>
 
 // Defaults mirror today's uniforms in src/render/sky.ts and cloudField.ts (colours converted to linear).
 export const FIELD_SPECS = {
@@ -99,6 +100,8 @@ export const FIELD_SPECS = {
   fxFlash: f('postfx', 0, 1, 0),
   /** Screen x (0 left .. 1 right) of the flash's local glow. */
   fxFlashX: f('postfx', 0, 1, 0.5),
+  /** Screen y (0 bottom .. 1 top) of the flash's local glow; lightning that starts in a cumulonimbus moves it there. */
+  fxFlashY: f('postfx', 0, 1, 0.55),
 } as const satisfies Record<string, FieldSpec>
 
 export type FieldKey = keyof typeof FIELD_SPECS

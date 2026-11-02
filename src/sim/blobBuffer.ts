@@ -1,8 +1,11 @@
 // The one thing that crosses from the sim (CPU) to the renderer (GPU) each frame for the play layer.
 // The sim writes it, the renderer uploads it as a data texture. Nothing flows back.
 
-/** Floats per blob. Two RGBA texels per blob when uploaded. */
-export const BLOB_STRIDE = 8
+/**
+ * Floats per blob: three RGBA texels (two of motion and size, one of type). 12 floats = 48 bytes, so 256 blobs upload
+ * 12 KB per frame (PLAN's target is under 16 KB; a 16-float stride would sit exactly on it).
+ */
+export const BLOB_STRIDE = 12
 
 /** Upper bound the renderer sizes its texture for. */
 export const MAX_BLOBS = 256
@@ -35,6 +38,16 @@ export const BLOB = {
   cloudId: 6,
   /** 1 for a live blob, 0 for an unused slot. */
   alive: 7,
+  /**
+   * Type as a one-hot over these three consecutive slots (cumulus, stratus, cumulonimbus): exactly one is 1 for a live blob,
+   * all are 0 for an unused slot. One-hot rather than an index so the splat shader can multiply them straight into the
+   * field's channels, and so a dead slot adds nothing to any of them.
+   */
+  typeCumulus: 8,
+  typeStratus: 9,
+  typeNimbus: 10,
+  /** Spare (keeps the third texel whole). */
+  spare: 11,
 } as const
 
 export function createBlobBuffer(): Float32Array {

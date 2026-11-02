@@ -2,6 +2,7 @@
 // query come in as ports, so tests run the exact path the game uses.
 import { FULL_SHAPE, SOFT_SHAPE, STRIKE_LEAD } from './envelope.ts'
 import { createRng } from './rng.ts'
+import { anchorStrike, type StrikeAnchor } from './anchor.ts'
 import { drawStrike, createStrikeScheduler, type StrikeEvent } from './scheduler.ts'
 import { flashAt, makeStrike, pruneStrikes, type FlashState, type Strike } from './strike.ts'
 import { planThunder, type Clocks, type SkipReason } from './sync.ts'
@@ -22,6 +23,11 @@ export interface StrikePorts {
   currentTime(): number
   thunder: ThunderPort
   reducedMotion(): boolean
+  /**
+   * Where lightning may start: the cumulonimbus clouds on screen right now (empty when there are none, which falls back to
+   * the strike's own x). Optional so test ports can omit it.
+   */
+  anchors?(): readonly StrikeAnchor[]
 }
 
 /** What the harness shows for a strike. */
@@ -32,6 +38,7 @@ export interface StrikeReport {
   readonly d: number
   readonly intensity: number
   readonly x: number
+  readonly y: number
   /** The output latency the thunder start was shifted by (s). */
   readonly latency: number
   readonly scheduledThunderAt: number | null
@@ -80,6 +87,7 @@ export function createStrikeDirector(seed: number, ports: StrikePorts) {
       d: strike.d,
       intensity: strike.intensity,
       x: strike.x,
+      y: strike.y,
       latency,
       scheduledThunderAt: plan.kind === 'play' ? plan.startAt : null,
       skippedReason: plan.kind === 'skip' ? plan.reason : null,
@@ -90,16 +98,17 @@ export function createStrikeDirector(seed: number, ports: StrikePorts) {
   return {
     /** Once per fixed sim step with the resolved P.strikesEnabled / P.strikeRate. */
     step(dt: number, enabled: number, rate: number): void {
-      for (const e of scheduler.step(dt, enabled >= 0.5, rate)) fire(e)
+      for (const e of scheduler.step(dt, enabled >= 0.5, rate)) fire(anchorStrike(e, ports.anchors?.() ?? []))
     },
     /** Fire a strike now (harness / debug); missing fields are drawn from a separate stream. */
     force(o: StrikeForce = {}): StrikeReport {
       const e = drawStrike(forceRng)
+      // An explicit x wins; otherwise the strike starts in a cumulonimbus when there is one.
+      const base = o.x === undefined ? anchorStrike(e, ports.anchors?.() ?? []) : { ...e, x: clamp(o.x, 0, 1) }
       return fire({
-        ...e,
+        ...base,
         intensity: o.intensity === undefined ? e.intensity : clamp(o.intensity, 0, 1),
         d: o.d === undefined ? e.d : Math.max(0, o.d),
-        x: o.x === undefined ? e.x : clamp(o.x, 0, 1),
       })
     },
     /** Current flash (and where). Prunes finished strikes. */
@@ -128,5 +137,5 @@ export type StrikeDirector = ReturnType<typeof createStrikeDirector>
 
 /** The transient layer a flash writes: post-FX only (the type has no interaction keys). */
 export function flashLayer(f: FlashState): TransientLayer {
-  return { fxFlash: f.value, fxFlashX: f.x }
+  return { fxFlash: f.value, fxFlashX: f.x, fxFlashY: f.y }
 }
