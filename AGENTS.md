@@ -19,7 +19,11 @@ export PATH=~/.local/share/fnm/node-versions/v24.18.1/installation/bin:$PATH
 | `npm run lint` | oxlint |
 | `npm test` | Vitest + fast-check, node, `src/**/*.test.ts` |
 | `npm run build` | typecheck + `vite build` |
+| `npm run build:pages` | `build` with `--base=/cloudy/`, the base the Pages deploy uses |
+| `npm run preview:pages` | Builds for Pages, then serves it at http://127.0.0.1:43202/cloudy/ |
 | `npm run verify` | Build, then drive the game in a real browser on WebGPU, forced WebGL2 and a phone viewport; screenshots in `artifacts/verify/` |
+
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every PR and push to main; `pages.yml` deploys a green push to main to GitHub Pages at the `/cloudy/` base path. `npm run build:pages` / `npm run preview:pages` (port 43202) reproduce the Pages build locally. `verify` is local only (needs a browser and a visible window for WebGPU).
 
 ## Before you finish
 

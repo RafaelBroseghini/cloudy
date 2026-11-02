@@ -82,15 +82,18 @@ Gameplay is identical on every tier. Tiers change pixel ratio cap, field/thickne
 
 | | Scope |
 | --- | --- |
-| M0 | Repo, AGENTS.md, `window.__GAME__` harness, verify skill (WebGPU and forced WebGL2) |
-| M1 | Gradient sky, middle-layer blob clouds as a metaball field, cursor push with density drag and spring-back, fixed step, split and re-merge with hysteresis |
-| M2 | Weather parameter layers and blending; rain; parallax scenery layers (pulled forward from M6) |
-| M3 | Thunder: strike scheduler, flash, synced audio — done; thunder: public-domain Commons recordings (public/audio/CREDITS.md) |
-| M4 | Tornado vortex, curl-noise wind, debris |
-| M5 | Preset scenes, player sliders, saved settings |
-| M6 | 3D LUT, bloom |
-| M7 | Quality tiers, frame-time governor, perf checks on devices |
-| Later | TLA+ model (invariants listed below), device matrix |
+| M0 | done: repo, `window.__GAME__` harness, verify skill (WebGPU and forced WebGL2) |
+| M1 | done: blob clouds, cursor push with density drag, split and re-merge with hysteresis |
+| M2 | done: weather layers and blending, rain, parallax scenery layers |
+| M3 | done: lightning flash and thunder synced on the audio clock, public-domain recordings |
+| Extra | done, not in the original table: dev tweak panel (`` ` `` or `?dev`), ambient curl-noise breeze with wrap-around, cumulus, stratus and cumulonimbus with per-type multipliers, 2.5D volumetric clouds with light marching and lit scenery, `hi`/`mid`/`low` quality tiers |
+| M4 | not started: tornado vortex, debris and swirl (the breeze in Extra is ambient, not the vortex). Last, by explicit decision; also revisit `softSpeed` and `WIND_ACCEL_GAIN` |
+| M5 | done: six preset scenes, seven player sliders, dice randomize, saved settings with Valibot validation, Sky panel |
+| M6 | not started: 3D LUT grading and bloom. Sunset and purple dusk already come from the time-of-day slider |
+| M7 | partly done: the `hi`/`mid`/`low` tiers exist (Extra). Not started: frame-time governor, automatic tier switching, real-device checks (iPhone, Android phone, iPad) |
+| Later | TLA+ model (invariants listed below) |
+
+Not built yet, in build order: M6; M7's governor, automatic tiers and device checks; the TLA+ model; M4 last.
 
 ## Invariants to keep (tests now, TLA+ later)
 
