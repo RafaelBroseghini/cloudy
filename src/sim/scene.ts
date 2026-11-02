@@ -37,7 +37,7 @@ export interface SceneLayout {
 export type SceneName = 'm1' | 'empty'
 
 /** Small deterministic PRNG (mulberry32); the sim must not touch Math.random. */
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed | 0
   return () => {
     a = (a + 0x6d2b79f5) | 0

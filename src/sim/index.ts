@@ -6,3 +6,5 @@ export { PARAM_SPECS, clampParams, defaultParams, gateOrdered } from './params.t
 export type { ParamKey, Params } from './params.ts'
 export { FIXED_DT, MAX_STEPS_PER_FRAME } from './fixedStep.ts'
 export type { SceneName, SceneSpec, CloudSpec } from './scene.ts'
+export { createFlow, curl, CURL_RMS, EDDY_STRETCH } from './flow.ts'
+export type { Flow, FlowParams } from './flow.ts'

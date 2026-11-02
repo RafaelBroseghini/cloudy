@@ -4,11 +4,16 @@
 
 ## Layer order
 
-`P = defaults ⊕ scene ⊕ weather ⊕ user ⊕ transient`. Later wins per field; unset fields (and non-finite values) fall through. Then every field is clamped to its range and the interaction subset goes through `clampParams` (`d_touch < d_release`).
+`P = defaults ⊕ scene ⊕ weather ⊕ user ⊕ dev ⊕ transient`. Later wins per field; unset fields (and non-finite values) fall through. Then every field is clamped to its range and the interaction subset goes through `clampParams` (`d_touch < d_release`).
 
 - `scene`: `Layer` (any field). The weather layer is blended against the scene-below values, so a scene shows through wherever a preset leaves a field unset.
 - `user`: `UserLayer`, a placeholder limited to `SLIDER_KEYS` (continuous, non-interaction). Empty until M5.
+- `dev`: `Layer` (any field, interaction included), written by the dev panel or the harness (`setDev` / `clearDev`). It sits above weather and user, so an override survives weather changes while untouched fields keep following the blend; clearing a key falls back to the layers below. Values are range-clamped when stored, and `d_touch < d_release` is still enforced at resolve. Never set by gameplay code.
 - `transient`: `TransientLayer`, typed to lighting and post-FX keys only. `resolve` also reads only `TRANSIENT_KEYS`, so a cast cannot smuggle in sim fields.
+
+## Dev panel (`src/dev`, dev tool only)
+
+The backtick key or `?dev` opens a lil-gui panel (0.21.0, loaded by dynamic import on first open, so it is its own chunk). `model.ts` builds the controls from `FIELD_SPECS` (one folder per group, `interaction` open, others folded; a phone starts folded): a slider per field with the spec range, one colour picker per `<name>R/G/B` triplet (shown sRGB, stored linear; HDR values above 1 clip in the picker). Untouched controls show the live resolved value; touching one sets a dev override (orange name), double-click a name clears it; each folder has a reset, plus "reset all overrides" and "copy overrides JSON" (paste-ready for `presets.ts`; falls back to `console.log`). A red wavy name means the resolved value differs from the stored override (the gate gap). The top has weather + blend seconds, force strike, load scene, pause, one-step and a stats line. Nothing is persisted. Keys 1..4 still work with the panel focused, except while typing in a text box (Enter/Escape leave it).
 
 ## Field groups (`FIELD_SPECS`: group, kind, min, max, default)
 
@@ -16,10 +21,24 @@
 - `sky`: `skyTop/Horizon/Bottom/Sun{R,G,B}` (linear RGB), horizon height, sun x/y/size/strength.
 - `lighting`: `lightDirX/Y`, `lightGain`, `lightAmbient`, `cloudLit/Mid/Shade{R,G,B}`.
 - `scenery`: `far`, `mid`, `near` x `Opacity|Tint|Drift|Density`. Render-only.
-- `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (strikes per second, mean), `strikesEnabled` (step).
+- `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (strikes per second, mean), `strikesEnabled` (step), and the breeze below.
 - `postfx`: `fxExposure`, `fxFlash` (0), `fxFlashX` (0.5: screen x of the flash glow).
 
 Defaults match today's `sky.ts` / `cloudField.ts` uniforms (hex converted to linear RGB).
+
+## Breeze (weather group; defaults are the clear-sky values)
+
+Ambient air on the play clouds (`src/sim/flow.ts`, see `docs/SIM.md`): a prevailing drift plus slowly evolving, divergence-free curl noise.
+
+| Field | Range | Default | Meaning |
+| --- | --- | --- | --- |
+| `breezeSpeed` | 0 to 1.5 | 0.18 | Prevailing drift (units/s). Keep far under `softSpeed` (3). |
+| `breezeAngle` | -pi to pi | 0 | Direction (rad, 0 = toward +x). Keep near 0: a vertical drift piles clouds against the top and bottom walls. |
+| `turbulence` | 0 to 1 | 0.06 | RMS speed of the curl noise (units/s). |
+| `turbulenceScale` | 1.5 to 20 | 7 | Eddy height in units (eddies are 2.5x wider). |
+| `turbulenceTime` | 0 to 1 | 0.06 | Evolution rate, noise cells per second (about 1 / eddy lifetime in s). |
+
+Presets (speed / turbulence / scale / time): clear = defaults (0.18 / 0.06 / 7 / 0.06), rain 0.23 / 0.10 / 6 / 0.09, thunder (gusty) 0.30 / 0.15 / 4.5 / 0.15, tornado 0.28 / 0.14 / 5 / 0.12 on top of its wind. A resting cloud moves about 0.1 to 0.4 units/s. `breezeOf(P)` (drive.ts) gives the sim's `FlowParams`, or `null` when drift and turbulence are both 0; the runner calls `sink.setBreeze?.(...)` on every change. The renderer also reads `breezeSpeed`/`breezeAngle`: each scenery layer drifts at `breeze * depth * 0.5` on top of its own `*Drift`.
 
 ## Blend kinds
 
@@ -64,6 +83,10 @@ Stateless analytic streaks in the composite shader: no particles, no compute, no
 | near | 1.5 (in front, shifts opposite) | 1.1 x 3.6 | 0.22-0.42 | 0.026 | 0.95 | 0.55 | 0 | muted by 0.7 where play density is high |
 
 `scene.rain.setTier(0..1)` scales the streak count (the quality tier hook; no governor yet). Streaks are never thinner than a device pixel (dimmed instead).
+
+## Living cloud surfaces (render-only, uniforms only)
+
+Play clouds: the erosion noise is sampled in the air's frame (`scene.setAir(sim.flowState())`, so it stays put on a drifting cloud), bent by a slow 2-octave domain warp, and evolves along a CPU-integrated phase (`look.billow`, `billowRate` 0.1/s, 0.15x under `prefers-reduced-motion`); the same noise nudges the interior shading (`billowShade`). Scenery: each layer's noise `evolve` rate is 0.04 / 0.07 / 0.10 per second (far, mid, near), so layers morph as well as translate; reduced motion scales drift and evolution to 0.2x. The sim's breeze is not scaled by reduced motion.
 
 ## Look tuning (rain, thunder, tornado)
 

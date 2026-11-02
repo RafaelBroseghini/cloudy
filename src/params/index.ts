@@ -5,5 +5,5 @@ export { WEATHER_STATES, advanceWeather, startTransition, stateWeights, steady, 
 export type { StateWeights, Weather, WeatherState } from './weather.ts'
 export { SLIDER_KEYS, TRANSIENT_KEYS, colorOf, groupOf, interactionOf, resolve } from './resolve.ts'
 export type { Layers, P, SliderKey, TransientKey, TransientLayer, UserLayer } from './resolve.ts'
-export { createDrive, createDriveRunner, parseWeatherParam, reportWeather, sameInteraction, setDriveLayers, setDriveWeather, stepDrive, windOf } from './drive.ts'
+export { createDrive, clearDriveDev, createDriveRunner, parseWeatherParam, reportWeather, sameInteraction, setDriveDev, setDriveLayers, setDriveWeather, stepDrive, windOf } from './drive.ts'
 export type { Drive, DriveSink, DriveStep, WeatherReport } from './drive.ts'

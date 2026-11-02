@@ -83,6 +83,17 @@ export const FIELD_SPECS = {
   strikeRate: f('weather', 0, 1, 0),
   strikesEnabled: f('weather', 0, 1, 0, 'step'),
   vortexStrength: f('weather', 0, 1, 0),
+  // ambient breeze on the play clouds (see sim/flow.ts); defaults are the clear-sky values: a slow drift, faint eddies
+  /** Prevailing drift speed (units/s). Keep well under softSpeed (3). */
+  breezeSpeed: f('weather', 0, 1.5, 0.18),
+  /** Prevailing direction (radians, 0 = toward +x). Off-horizontal drift piles clouds against the top and bottom walls. */
+  breezeAngle: f('weather', -Math.PI, Math.PI, 0),
+  /** RMS speed (units/s) of the divergence-free curl noise added to the drift. */
+  turbulence: f('weather', 0, 1, 0.06),
+  /** Eddy size (units): the curl noise wavelength. */
+  turbulenceScale: f('weather', 1.5, 20, 7),
+  /** How fast the eddies evolve (noise cells per second; about 1 / eddy lifetime in seconds). */
+  turbulenceTime: f('weather', 0, 1, 0.06),
   // postfx
   fxExposure: f('postfx', 0.25, 2, 1),
   fxFlash: f('postfx', 0, 1, 0),

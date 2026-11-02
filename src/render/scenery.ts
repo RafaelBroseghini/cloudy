@@ -95,6 +95,8 @@ export const SCENERY_MAP = {
   mid: { opacityGain: 1.1, baseHaze: 0.3, driftGain: 7, coverageAtDefault: 0.5, tint: "#f3f8ff", shade: "#9bb2d6" },
   near: { opacityGain: 1.7, baseHaze: 0, driftGain: 8.4, coverageAtDefault: 0.42, tint: "#ffffff", shade: "#dbe7f6" },
 } as const;
+/** Scenery layer speed per unit of breeze velocity, times the layer's depth factor (nearer layers move faster). */
+export const SCENERY_BREEZE_GAIN = 0.5;
 /** Noise units of coverage threshold per unit of the 0..1 Density field. */
 export const DENSITY_TO_COVERAGE = 0.6;
 
@@ -123,7 +125,7 @@ export function createScenery() {
       shade: "#c3d6ec",
       haze: 0.62,
       shadow: 0.55,
-      evolve: 0.015,
+      evolve: 0.04,
     }),
     mid: createLayerUniforms({
       opacity: 0.78,
@@ -139,7 +141,7 @@ export function createScenery() {
       shade: "#9bb2d6",
       haze: 0.42,
       shadow: 0.8,
-      evolve: 0.03,
+      evolve: 0.07,
     }),
     near: createLayerUniforms({
       opacity: 0.6,
@@ -155,7 +157,7 @@ export function createScenery() {
       shade: "#dbe7f6",
       haze: 0.0,
       shadow: 0,
-      evolve: 0.05,
+      evolve: 0.1,
     }),
   };
 
@@ -255,6 +257,8 @@ export function createScenery() {
      * Per rendered frame: pointer in world units (null = absent), view half extents, and elapsed seconds.
      * Integrates drift on the CPU so changing drift speeds never makes the layers jump.
      */
+    /** True while prefers-reduced-motion is on: evolution everywhere runs much slower. */
+    reduced: (): boolean => reduced,
     update(pointer: { x: number; y: number } | null, halfW: number, dt: number): void {
       motion.setTarget(pointer ? { x: pointer.x / halfW, y: pointer.y / (VIEW_HEIGHT / 2) } : null);
       motion.step(dt);

@@ -28,6 +28,7 @@ import {
   max,
   mix,
   mx_fractal_noise_float,
+  mx_fractal_noise_vec2,
   smoothstep,
   texture,
   uniform,
@@ -120,7 +121,20 @@ export function createCloudLook() {
     /** Edge erosion strength (multiplicative on density) and noise scale in world units^-1. */
     erosion: uniform(0.4),
     noiseScale: uniform(1.7),
-    noiseSpeed: uniform(0.12),
+    /**
+     * The air's travelled distance (world units, from the sim): the noise is sampled in the frame that rides with the air,
+     * so as clouds drift the erosion stays put on them instead of swimming through them.
+     */
+    air: uniform(new Vector2(0, 0)),
+    /** CPU-integrated noise phase (z axis): changing the rate never jumps the pattern. */
+    billow: uniform(0),
+    /** Phase units per second of the slow billowing of edges and interior. */
+    billowRate: uniform(0.1),
+    /** Domain warp: reach (world units) and spatial frequency of the swirl that makes the edges roll. */
+    warp: uniform(0.4),
+    warpScale: uniform(0.45),
+    /** Strength of the noise's contribution to the shading, so the interior billows too (0 = flat interior). */
+    billowShade: uniform(0.16),
     /** World-space offset toward the light used for the second density sample. */
     lightOffset: uniform(new Vector2(-0.3, 1.1)),
     lightGain: uniform(2.6),
@@ -152,17 +166,16 @@ export function shadeClouds(
   const field = texture(fieldTex);
   const extent = vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT);
 
+  // x: eroded density, y: the noise (-1..1), reused for the interior shading.
   const density = Fn(([p]: [Node<"vec2">]) => {
     // Render-target textures are sampled y-down on both backends (three flips them on WebGL), like screenUV.
     const d = field.sample(p.div(extent).add(0.5).flipY()).r;
-    const n = mx_fractal_noise_float(
-      vec3(p.mul(look.noiseScale).add(vec2(time.mul(look.noiseSpeed), 0)), time.mul(0.07)),
-      3,
-      2,
-      0.5,
-    );
+    // Noise in the air's frame, bent by a slowly evolving swirl so edges roll and billow instead of sliding.
+    const q = p.sub(look.air);
+    const warp = mx_fractal_noise_vec2(vec3(q.mul(look.warpScale), look.billow.mul(0.6).add(11.3)), 2, 2, 0.5).mul(look.warp);
+    const n = mx_fractal_noise_float(vec3(q.add(warp).mul(look.noiseScale), look.billow), 3, 2, 0.5);
     // Multiplicative erosion keeps empty sky empty and only bites near the edges.
-    return d.mul(n.mul(look.erosion).add(1));
+    return vec2(d.mul(n.mul(look.erosion).add(1)), n);
   });
 
   // Soft-saturated, un-eroded density for lighting: interior stays flat so only real surfaces shade.
@@ -172,11 +185,12 @@ export function shadeClouds(
   });
 
   return Fn(([p]: [Node<"vec2">]) => {
-    const f0 = density(p);
+    const dn = density(p);
+    const f0 = dn.x;
     const coverage = smoothstep(look.threshold.sub(look.softness), look.threshold.add(look.softness), f0);
     // The side toward the light is denser => we are in shadow; emptier or equal => lit.
     const diff = body(p).sub(body(p.add(look.lightOffset)));
-    const shade = smoothstep(0, 1, clamp(diff.mul(look.lightGain).negate(), 0, 1));
+    const shade = smoothstep(0, 1, clamp(diff.mul(look.lightGain).negate().add(dn.y.mul(look.billowShade)), 0, 1));
     // Thin edges read slightly lighter and bluer, like scattered sky light.
     const rim = smoothstep(look.threshold, look.threshold.mul(4), f0).oneMinus().mul(0.35);
     const lit = mix(look.litColor, look.midColor, rim);

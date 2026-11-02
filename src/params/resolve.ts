@@ -1,4 +1,4 @@
-// P = defaults + scene + weather + user + transient; later layer wins per field, unset fields fall through.
+// P = defaults + scene + weather + user + dev + transient; later layer wins per field, unset fields fall through.
 import { PARAM_KEYS, clampParams, type Params } from '../sim/params.ts'
 import {
   FIELD_KEYS,
@@ -29,6 +29,8 @@ export interface Layers {
   /** Preset scene (any field). */
   readonly scene?: Layer
   readonly user?: UserLayer
+  /** Developer overrides (any field, interaction included): above weather and user, below the strike flash. Dev panel only. */
+  readonly dev?: Layer
   readonly transient?: TransientLayer
 }
 
@@ -49,6 +51,7 @@ export function resolve(layers: Layers, weather: Weather): P {
   apply(out, layers.scene, FIELD_KEYS)
   apply(out, weatherLayer(weather, { ...out }), FIELD_KEYS)
   apply(out, layers.user, SLIDER_KEYS)
+  apply(out, layers.dev, FIELD_KEYS)
   apply(out, layers.transient, TRANSIENT_KEYS)
   for (const k of FIELD_KEYS) out[k] = clampField(k, out[k])
   // Belt and braces: the ranges already keep d_touch < d_release; clampParams enforces the minimum gap.

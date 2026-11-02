@@ -2,6 +2,7 @@ import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { PARAM_KEYS, defaultParams, gateOrdered } from '../sim/params.ts'
 import { FIELD_KEYS, FIELD_SPECS, defaultValues, type FieldKey, type Layer } from './fields.ts'
+import { clearDriveDev, createDrive, createDriveRunner, setDriveDev } from './drive.ts'
 import { WEATHER_KEYS, WEATHER_PRESETS } from './presets.ts'
 import {
   SLIDER_KEYS,
@@ -304,5 +305,98 @@ describe('transitions', () => {
       const range = FIELD_SPECS[k].max - FIELD_SPECS[k].min
       expect(Math.abs(b[k] - a[k])).toBeLessThan(0.01 * range)
     }
+  })
+})
+
+describe('dev layer', () => {
+  const rain = WEATHER_PRESETS.rain
+
+  it('wins over weather and user, for any field including interaction', () => {
+    const p = resolve({ user: { rainRate: 0.1 }, dev: { rainRate: 0.9, k_s: 123, skyTopR: 0.2 } }, steady('rain'))
+    expect(p.rainRate).toBe(0.9)
+    expect(p.k_s).toBe(123)
+    expect(p.skyTopR).toBe(0.2)
+    expect(p.k_r).toBe(rain.k_r)
+  })
+
+  it('persists across weather changes; the rest follows the blend', () => {
+    const dev: Layer = { k_s: 111, skyTopB: 0.7 }
+    for (const w of [steady('clear'), steady('thunder'), at('rain', 'tornado', 0.4), at('clear', 'rain', 0.9)]) {
+      const p = resolve({ dev }, w)
+      expect(p.k_s).toBe(111)
+      expect(p.skyTopB).toBe(0.7)
+    }
+    const a = resolve({ dev }, at('clear', 'rain', 0.3))
+    const b = resolve({ dev }, at('clear', 'rain', 0.6))
+    expect(b.rainRate).toBeGreaterThan(a.rainRate)
+  })
+
+  it('clearing a dev key falls back to the weather value', () => {
+    const w = at('clear', 'rain', 0.5)
+    const base = resolve({}, w)
+    const withDev = resolve({ dev: { rainRate: 0.01, k_s: 20 } }, w)
+    expect(withDev.rainRate).toBe(0.01)
+    let d = createDrive({}, 'clear')
+    d = setDriveDev(d, { rainRate: 0.01, k_s: 20 }).drive
+    expect(d.p.rainRate).toBe(0.01)
+    const cleared = clearDriveDev(d, ['rainRate']).drive
+    expect(cleared.layers.dev).toEqual({ k_s: 20 })
+    expect(cleared.p.rainRate).toBe(resolve({}, cleared.weather).rainRate)
+    expect(cleared.p.k_s).toBe(20)
+    expect(clearDriveDev(cleared).drive.layers.dev).toEqual({})
+    expect(clearDriveDev(cleared).drive.p).toEqual(resolve({}, cleared.weather))
+    expect(base.rainRate).toBeGreaterThan(0.01)
+  })
+
+  it('setDriveDev clamps into range, drops junk, and is a no-op when nothing changes', () => {
+    const d = createDrive({}, 'clear')
+    const s = setDriveDev(d, { fxExposure: 99, rainRate: Number.NaN, lightGain: -4 })
+    expect(s.drive.layers.dev).toEqual({ fxExposure: FIELD_SPECS.fxExposure.max, lightGain: FIELD_SPECS.lightGain.min })
+    const again = setDriveDev(s.drive, { fxExposure: 99 })
+    expect(again.changed).toBe(false)
+    expect(again.drive).toBe(s.drive)
+    expect(clearDriveDev(s.drive, ['rainRate']).changed).toBe(false)
+  })
+
+  it('wild dev layers still resolve in range and keep d_touch < d_release', () => {
+    fc.assert(
+      fc.property(anyWeather, anyLayer, anyLayer, (w, dev, transient) => {
+        const p = resolve({ dev, transient: transient as TransientLayer }, w)
+        inRange(p)
+        expect(gateOrdered(p)).toBe(true)
+        expect(gateOrdered(interactionOf(p))).toBe(true)
+      }),
+    )
+    // The ranges alone allow d_touch above d_release; the clamp restores the order.
+    const p = resolve({ dev: { d_touch: FIELD_SPECS.d_touch.max, d_release: FIELD_SPECS.d_release.min } }, steady('clear'))
+    expect(gateOrdered(p)).toBe(true)
+  })
+
+  it('a transient layer still cannot touch interaction fields, with or without a dev layer', () => {
+    fc.assert(
+      fc.property(anyWeather, anyLayer, anyLayer, (w, dev, transient) => {
+        const without = resolve({ dev }, w)
+        const withT = resolve({ dev, transient: transient as TransientLayer }, w)
+        expect(interactionOf(withT)).toEqual(interactionOf(without))
+        for (const k of FIELD_KEYS) {
+          if (!(TRANSIENT_KEYS as readonly FieldKey[]).includes(k)) expect(withT[k]).toBe(without[k])
+        }
+      }),
+    )
+  })
+
+  it('transient wins over dev on the lighting and post-FX fields it sets', () => {
+    expect(resolve({ dev: { fxFlash: 0.2, lightGain: 1 }, transient: { fxFlash: 0.8 } }, steady('clear')).fxFlash).toBe(0.8)
+    expect(resolve({ dev: { fxFlash: 0.2, lightGain: 1 }, transient: { fxFlash: 0.8 } }, steady('clear')).lightGain).toBe(1)
+  })
+
+  it('the runner keeps the dev layer when the strike flash swaps the transient layer', () => {
+    const r = createDriveRunner({ setParams: () => {}, setWind: () => {} }, {}, 'clear')
+    r.setDev({ k_s: 99 })
+    r.setLayers({ transient: { fxFlash: 0.5 } })
+    expect(r.drive.p.k_s).toBe(99)
+    expect(r.drive.p.fxFlash).toBe(0.5)
+    r.clearDev()
+    expect(r.drive.p.k_s).toBe(resolve({}, steady('clear')).k_s)
   })
 })

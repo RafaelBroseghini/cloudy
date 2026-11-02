@@ -6,6 +6,7 @@ import { BLOB, BLOB_STRIDE, MAX_BLOBS } from './blobBuffer.ts'
 import { loadBox2D, type Box2D } from './box2d.ts'
 import { stepCursor, type CursorState, type Pointer } from './cursor.ts'
 import { createFixedStepper, FIXED_DT, MAX_STEPS_PER_FRAME } from './fixedStep.ts'
+import { createFlow, type FlowParams, type Vec2 } from './flow.ts'
 import { blobDensity, influenceRadius } from './kernel.ts'
 import { clampParams, type Params } from './params.ts'
 import { buildLayout, sceneSpec, type SceneName, type SceneSpec } from './scene.ts'
@@ -18,6 +19,7 @@ export type Wind = (x: number, y: number, t: number) => { readonly x: number; re
 export interface SimOptions {
   params?: Partial<Params>
   wind?: Wind | null
+  breeze?: FlowParams | null
   maxStepsPerFrame?: number
 }
 
@@ -43,6 +45,14 @@ export interface SimInspect {
 export interface Sim {
   setPointer(p: Pointer): void
   setWind(w: Wind | null): void
+  /**
+   * Ambient air for the blobs: a prevailing drift plus curl noise (see flow.ts). Blobs only, never the cursor. While set,
+   * clouds that drift fully out of view downwind re-enter from the other side, and x containment fades out with the drift.
+   * Null (the default) leaves the sim exactly as it was.
+   */
+  setBreeze(b: FlowParams | null): void
+  /** The air's travelled distance and noise phase (sim time), for the renderer to anchor cloud noise to. */
+  flowState(): { readonly x: number; readonly y: number; readonly phase: number }
   /** One fixed step of 1/60 s. */
   step(): void
   /** Feed elapsed seconds through the fixed-step accumulator; returns steps run. */
@@ -69,6 +79,17 @@ const MAX_CURSOR_TRAVEL = 0.3
 const MAX_SLICES = 10
 /** Blob centres this far inside the visible rect are free; beyond that the containment force starts. */
 const CONTAIN_MARGIN = 0.6
+/** Prevailing x drift (units/s) below which x containment is fully on, and above which it is fully off. */
+const DRIFT_CONTAIN_ON = 0.02
+const DRIFT_CONTAIN_OFF = 0.1
+/** Drift under which clouds do not wrap (containment still partly holds them, so they could not leave anyway). */
+const WRAP_MIN_DRIFT = 0.05
+/** How far past a blob's centre its metaball is treated as visible, in radii (the field reaches 2.2 radii but is ~0 near the end). */
+const VISIBLE_REACH = 1.6
+/** A cloud wraps once its whole visible extent is this far past the edge. */
+const WRAP_EDGE = 0.1
+/** The wrap period is the view width plus twice this: one fixed length for every cloud, so spacing around the loop is kept. */
+const WRAP_SEAM = 3.5
 const CAT_BLOB = 1
 const CAT_CURSOR = 2
 export const CURSOR_RADIUS = 0.4
@@ -84,6 +105,11 @@ const CUT_REACH = 0.5
 const MAX_MERGE_SPRINGS = 6
 /** Rest-length floor so near-coincident blobs cannot produce huge strains. */
 const MIN_REST = 0.2
+
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
 
 /** Distance from point (x, y) to the segment (ax, ay)-(bx, by). */
 function segmentDistance(x: number, y: number, ax: number, ay: number, bx: number, by: number): number {
@@ -118,6 +144,10 @@ export async function createSim(opts: SimOptions = {}): Promise<Sim> {
 function makeSim(b2: Box2D, opts: SimOptions): Sim {
   let params = clampParams(opts.params ?? {})
   let wind: Wind | null = opts.wind ?? null
+  let breeze: FlowParams | null = opts.breeze ?? null
+  const flow = createFlow()
+  if (breeze) flow.setParams(breeze)
+  const air: Vec2 = { x: 0, y: 0 }
   const stepper = createFixedStepper(FIXED_DT, opts.maxStepsPerFrame ?? MAX_STEPS_PER_FRAME)
 
   // Scratch Box2D value objects, reused so the hot path allocates nothing on the wasm side.
@@ -555,14 +585,73 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     const c = 2 * Math.sqrt(k)
     const lx = halfW - CONTAIN_MARGIN
     const ly = halfH - CONTAIN_MARGIN
+    // With a breeze the cloud's x exits are open: a spring at the edge would stall the drift there, and on the upwind side
+    // it would yank a re-entering cloud into view. The force fades out as the drift grows, so zero drift keeps the old walls.
+    const kx = breeze ? 1 - smoothstep(DRIFT_CONTAIN_ON, DRIFT_CONTAIN_OFF, Math.abs(driftX())) : 1
     for (let i = 0; i < n; i++) {
       const x = px[i] ?? 0
       const y = py[i] ?? 0
       const ex = x > lx ? x - lx : x < -lx ? x + lx : 0
       const ey = y > ly ? y - ly : y < -ly ? y + ly : 0
-      if (ex !== 0) dvx[i] = (dvx[i] ?? 0) - FIXED_DT * (k * ex + c * (vx[i] ?? 0))
+      if (ex !== 0 && kx > 0) dvx[i] = (dvx[i] ?? 0) - kx * FIXED_DT * (k * ex + c * (vx[i] ?? 0))
       if (ey !== 0) dvy[i] = (dvy[i] ?? 0) - FIXED_DT * (k * ey + c * (vy[i] ?? 0))
     }
+  }
+
+  /** Mean x velocity the air carries clouds with: the breeze plus the wind hook's terminal velocity under blob damping. */
+  function driftX(): number {
+    let d = flow.mean.x
+    if (wind) d += wind(0, 0, step * FIXED_DT).x / Math.max(params.blobDamping, 0.5)
+    return d
+  }
+
+  /**
+   * Breeze as drag toward the moving air: each step adds `expm1(damping * dt) * u_air` to a blob's velocity, which makes the
+   * air velocity the terminal speed of a free blob in any weather (Box2D's linear damping removes the exp(-damping * dt)).
+   */
+  function applyBreeze(): void {
+    flow.advance(FIXED_DT)
+    const g = Math.expm1(params.blobDamping * FIXED_DT)
+    if (g === 0) return
+    for (let i = 0; i < n; i++) {
+      flow.sample(px[i] ?? 0, py[i] ?? 0, air)
+      dvx[i] = (dvx[i] ?? 0) + g * air.x
+      dvy[i] = (dvy[i] ?? 0) + g * air.y
+    }
+  }
+
+  /**
+   * A cloud whose every blob (metaball extent included) has left the view downwind is moved, as a whole, to just outside the
+   * opposite side by one fixed period. Positions only: blobs keep their velocities, springs and rest offsets are relative.
+   * Only downwind exits wrap, so a cloud on the upwind side (a flick, a re-entry) simply drifts back in.
+   */
+  function wrapClouds(): void {
+    if (!breeze || n === 0) return
+    const dir = driftX()
+    if (Math.abs(dir) < WRAP_MIN_DRIFT) return
+    const period = 2 * (halfW + WRAP_SEAM)
+    let moved = false
+    for (const members of clouds.values()) {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const i of members) {
+        const reach = VISIBLE_REACH * (radius[i] ?? 0)
+        lo = Math.min(lo, (px[i] ?? 0) - reach)
+        hi = Math.max(hi, (px[i] ?? 0) + reach)
+      }
+      let shift = 0
+      if (dir > 0 && lo > halfW + WRAP_EDGE) shift = -Math.max(period, hi + halfW + WRAP_EDGE)
+      else if (dir < 0 && hi < -halfW - WRAP_EDGE) shift = Math.max(period, halfW + WRAP_EDGE - lo)
+      if (shift === 0) continue
+      for (const i of members) {
+        px[i] = (px[i] ?? 0) + shift
+        vec.x = px[i] ?? 0
+        vec.y = py[i] ?? 0
+        b2.b2Body_SetTransform(bodies[i] as b2BodyId, vec, b2.b2Rot_identity)
+      }
+      moved = true
+    }
+    if (moved) refreshBoxes()
   }
 
   /**
@@ -629,6 +718,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
         dvy[i] = (dvy[i] ?? 0) + w.y * FIXED_DT
       }
     }
+    if (breeze) applyBreeze()
     if (params.containK > 0) contain()
     if (params.softSpeed < 1000) bleedOverspeed()
     for (let i = 0; i < n; i++) {
@@ -653,6 +743,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     refreshBoxes()
     armPairs()
     mergeTouching()
+    wrapClouds()
     step++
   }
 
@@ -673,6 +764,7 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     ptrVel.y = 0
     densityAtCursor = 0
     stepper.reset()
+    flow.reset()
     nextCloudId = spec.clouds.length + 1
     layout.blobs.forEach((b, i) => {
       px[i] = b.x
@@ -731,6 +823,11 @@ function makeSim(b2: Box2D, opts: SimOptions): Sim {
     setWind(w) {
       wind = w
     },
+    setBreeze(b) {
+      breeze = b
+      if (b) flow.setParams(b)
+    },
+    flowState: () => ({ x: flow.offset.x, y: flow.offset.y, phase: flow.phase }),
     step: stepOnce,
     advance(elapsed) {
       return stepper.advance(elapsed, stepOnce)

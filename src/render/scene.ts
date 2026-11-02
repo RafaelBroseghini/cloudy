@@ -8,6 +8,9 @@ import { createScenery } from "./scenery.ts";
 import { createSky } from "./sky.ts";
 import { createViewCamera, fitViewCamera, VIEW_HEIGHT } from "./view.ts";
 
+/** Billowing runs at this fraction of its speed under prefers-reduced-motion. */
+const REDUCED_EVOLVE = 0.15;
+
 export interface SceneOptions {
   /** Field resolution relative to the drawing buffer. 0.5 = half-res. */
   fieldScale?: number;
@@ -126,6 +129,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
      */
     updateScenery(pointer: Cursor | null, dt: number): void {
       scenery.update(pointer, (aspect.value * VIEW_HEIGHT) / 2, dt);
+      look.billow.value += look.billowRate.value * Math.min(Math.max(dt, 0), 0.25) * (scenery.reduced() ? REDUCED_EVOLVE : 1);
       rain.update(dt);
     },
     setBlobs(buf: Float32Array, count: number): void {
@@ -138,6 +142,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
       } else {
         cursorActive.value = 0;
       }
+    },
+    /** The sim's air offset (`sim.flowState()`): play-cloud noise rides with it. */
+    setAir(x: number, y: number): void {
+      look.air.value.set(x, y);
     },
     setTime(t: number): void {
       time.value = t;

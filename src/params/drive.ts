@@ -1,7 +1,9 @@
 // The per-step weather drive main.ts runs: advance the weather, resolve P, and say whether the sim's interaction
 // params changed. Pure (no three, no DOM), so tests run the exact path the game uses.
 import { PARAM_KEYS, type Params } from '../sim/params.ts'
+import type { FlowParams } from '../sim/flow.ts'
 import type { Wind } from '../sim/sim.ts'
+import { FIELD_KEYS, clampField, type FieldKey, type Layer } from './fields.ts'
 import { interactionOf, resolve, type Layers, type P } from './resolve.ts'
 import { advanceWeather, startTransition, steady, type Weather, type WeatherState } from './weather.ts'
 
@@ -54,9 +56,44 @@ export function setDriveWeather(d: Drive, to: WeatherState, seconds: number): Dr
   return next(d, startTransition(d.weather, to, seconds), d.layers)
 }
 
-/** Swap the scene/user/transient layers (M5 sliders, M3 strikes). */
+/** Swap in a whole `Layers` (scene/user/dev/transient). */
 export function setDriveLayers(d: Drive, layers: Layers): DriveStep {
   return next(d, d.weather, layers)
+}
+
+/**
+ * Add dev overrides (any field). Values are clamped into the field's range as they are stored; non-finite values and
+ * unknown keys are dropped. Setting what is already set changes nothing. (The gate gap `d_touch < d_release` is
+ * enforced when P resolves, so a dev layer can never break it.)
+ */
+export function setDriveDev(d: Drive, partial: Layer): DriveStep {
+  const dev: Layer = { ...d.layers.dev }
+  let changed = false
+  for (const k of FIELD_KEYS) {
+    const v = partial[k]
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    const c = clampField(k, v)
+    if (dev[k] !== c) {
+      dev[k] = c
+      changed = true
+    }
+  }
+  return changed ? next(d, d.weather, { ...d.layers, dev }) : next(d, d.weather, d.layers)
+}
+
+/** Remove dev overrides for `keys` (all of them when omitted); those fields fall back to the layers below. */
+export function clearDriveDev(d: Drive, keys?: readonly FieldKey[]): DriveStep {
+  const cur = d.layers.dev
+  if (!cur) return next(d, d.weather, d.layers)
+  const dev: Layer = { ...cur }
+  let changed = false
+  for (const k of keys ?? (Object.keys(cur) as FieldKey[])) {
+    if (k in dev) {
+      delete dev[k]
+      changed = true
+    }
+  }
+  return changed ? next(d, d.weather, { ...d.layers, dev }) : next(d, d.weather, d.layers)
 }
 
 /**
@@ -74,6 +111,14 @@ export function windOf(p: P): { readonly x: number; readonly y: number } {
 export interface DriveSink {
   setParams(p: Params): void
   setWind(w: Wind | null): void
+  /** Ambient breeze for blobs (null while both the drift and the turbulence are zero). Optional so test sinks can omit it. */
+  setBreeze?(b: FlowParams | null): void
+}
+
+/** The breeze for the sim from P, or null when there is neither drift nor turbulence. */
+export function breezeOf(p: P): FlowParams | null {
+  if (p.breezeSpeed === 0 && p.turbulence === 0) return null
+  return { speed: p.breezeSpeed, angle: p.breezeAngle, turbulence: p.turbulence, scale: p.turbulenceScale, rate: p.turbulenceTime }
 }
 
 /**
@@ -88,6 +133,7 @@ export function createDriveRunner(sink: DriveSink, layers: Layers, initial: Weat
   const sync = (): void => {
     wind = windOf(drive.p)
     sink.setWind(wind.x === 0 && wind.y === 0 ? null : windFn)
+    sink.setBreeze?.(breezeOf(drive.p))
   }
   sink.setParams(drive.interaction)
   sync()
@@ -106,8 +152,16 @@ export function createDriveRunner(sink: DriveSink, layers: Layers, initial: Weat
     setWeather(to: WeatherState, seconds: number): void {
       push(setDriveWeather(drive, to, seconds))
     },
+    /** Replace the named layers; layers not named keep their value (so a strike's transient cannot wipe the dev layer). */
     setLayers(l: Layers): void {
-      push(setDriveLayers(drive, l))
+      push(setDriveLayers(drive, { ...drive.layers, ...l }))
+    },
+    /** Dev layer: see `setDriveDev`. */
+    setDev(partial: Layer): void {
+      push(setDriveDev(drive, partial))
+    },
+    clearDev(keys?: readonly FieldKey[]): void {
+      push(clearDriveDev(drive, keys))
     },
   }
 }

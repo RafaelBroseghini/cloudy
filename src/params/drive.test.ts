@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { FIXED_DT, createSim, defaultParams, type Params, type Sim, type Wind } from '../sim/index.ts'
 import { PARAM_KEYS } from '../sim/params.ts'
-import { WIND_ACCEL_GAIN, createDriveRunner, parseWeatherParam, reportWeather, sameInteraction, windOf, type DriveSink } from './drive.ts'
+import { WIND_ACCEL_GAIN, breezeOf, createDriveRunner, parseWeatherParam, reportWeather, sameInteraction, windOf, type DriveSink } from './drive.ts'
 import { WEATHER_PRESETS } from './presets.ts'
 import { interactionOf, resolve } from './resolve.ts'
 import { steady } from './weather.ts'
@@ -17,6 +17,55 @@ function recorder(): DriveSink & { sets: Params[]; winds: Array<Wind | null> } {
   const winds: Array<Wind | null> = []
   return { sets, winds, setParams: (p) => sets.push(p), setWind: (w) => winds.push(w) }
 }
+
+describe('breeze drive', () => {
+  const sinkWithBreeze = () => {
+    const breezes: Array<ReturnType<typeof breezeOf>> = []
+    return { breezes, setParams: () => undefined, setWind: () => undefined, setBreeze: (b: ReturnType<typeof breezeOf>) => breezes.push(b) }
+  }
+
+  it('clear weather pushes a slow drift with faint turbulence, and sinks without setBreeze still work', () => {
+    const sink = sinkWithBreeze()
+    createDriveRunner(sink, {}, 'clear')
+    const b = sink.breezes.at(-1)
+    expect(b).toMatchObject({ angle: 0 })
+    expect(b?.speed).toBeGreaterThan(0.1)
+    expect(b?.speed).toBeLessThan(0.3)
+    expect(b?.turbulence).toBeLessThan(b?.speed ?? 0)
+    expect(() => createDriveRunner(recorder(), {}, 'rain')).not.toThrow()
+  })
+
+  it('weather scales it: rain is faster than clear, thunder gustier than rain, all far under softSpeed', () => {
+    const of = (w: 'clear' | 'rain' | 'thunder' | 'tornado') => breezeOf(resolve({}, steady(w)))
+    const [c, r, t, n] = [of('clear'), of('rain'), of('thunder'), of('tornado')]
+    expect(r?.speed).toBeGreaterThan(c?.speed ?? 0)
+    expect(t?.turbulence).toBeGreaterThan(r?.turbulence ?? 0)
+    expect(t?.rate).toBeGreaterThan(r?.rate ?? 0)
+    for (const b of [c, r, t, n]) expect((b?.speed ?? 9) + 3 * (b?.turbulence ?? 9)).toBeLessThan(defaultParams().softSpeed / 2)
+  })
+
+  it('is null (breeze off) when both the drift and the turbulence are zero', () => {
+    const sink = sinkWithBreeze()
+    createDriveRunner(sink, { scene: { breezeSpeed: 0, turbulence: 0 } }, 'clear')
+    expect(sink.breezes.at(-1)).toBeNull()
+  })
+
+  it('a transition blends the breeze without a jump', () => {
+    const sink = sinkWithBreeze()
+    const r = createDriveRunner(sink, {}, 'clear')
+    r.setWeather('thunder', 4)
+    let prev = sink.breezes.at(-1)?.speed ?? 0
+    let maxJump = 0
+    for (let i = 0; i < 260; i++) {
+      r.step(FIXED_DT)
+      const s = sink.breezes.at(-1)?.speed ?? 0
+      maxJump = Math.max(maxJump, Math.abs(s - prev))
+      prev = s
+    }
+    expect(maxJump).toBeLessThan(0.01)
+    expect(prev).toBeCloseTo(WEATHER_PRESETS.thunder.breezeSpeed ?? 0, 9)
+  })
+})
 
 describe('weather drive', () => {
   it('clear weather leaves the sim on its default params and no wind', () => {

@@ -6,7 +6,7 @@ import { Color, Vector2 } from "three/webgpu";
 import { defaultValues, type Values } from "../params/index.ts";
 import type { CloudyScene } from "./scene.ts";
 import { WIND_SLANT } from "./rain.ts";
-import { DENSITY_TO_COVERAGE, SCENERY_MAP } from "./scenery.ts";
+import { DENSITY_TO_COVERAGE, SCENERY_BREEZE_GAIN, SCENERY_MAP } from "./scenery.ts";
 
 const SKY_KEYS = [
   "skyTopR", "skyTopG", "skyTopB", "skyHorizonR", "skyHorizonG", "skyHorizonB", "skyBottomR", "skyBottomG", "skyBottomB",
@@ -22,9 +22,10 @@ const SCENERY_KEYS = [
 ] as const;
 const POST_KEYS = ["fxExposure", "fxFlash", "fxFlashX"] as const;
 const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
+const BREEZE_KEYS = ["breezeSpeed", "breezeAngle"] as const;
 
 /** The param fields the renderer consumes (a subset of `P`; pass the whole resolved record if convenient). */
-export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...SCENERY_KEYS, ...POST_KEYS, ...RAIN_KEYS] as const;
+export const LOOK_KEYS = [...SKY_KEYS, ...LIGHT_KEYS, ...SCENERY_KEYS, ...POST_KEYS, ...RAIN_KEYS, ...BREEZE_KEYS] as const;
 export type LookKey = (typeof LOOK_KEYS)[number];
 export type LookValues = Partial<Pick<Values, LookKey>>;
 
@@ -76,13 +77,18 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
     ratio(g("cloudShadeG"), DEFAULT_SHADE[1]),
     ratio(g("cloudShadeB"), DEFAULT_SHADE[2]),
   ];
+  // The breeze that moves the play clouds also carries the scenery, scaled by depth (far banks barely move, wisps up front fly).
+  const bx = g("breezeSpeed") * Math.cos(g("breezeAngle"));
+  const by = g("breezeSpeed") * Math.sin(g("breezeAngle"));
   for (const name of ["far", "mid", "near"] as const) {
     const u = layers[name];
     const m = SCENERY_MAP[name];
     u.opacity.value = clamp01(g(`${name}Opacity`) * m.opacityGain);
     // Tint: how far toward the sky horizon colour (atmospheric perspective), on top of the layer's base haze.
     u.haze.value = m.baseHaze + clamp01(g(`${name}Tint`)) * (1 - m.baseHaze);
-    u.drift.value.x = g(`${name}Drift`) * m.driftGain;
+    const follow = u.depth.value * SCENERY_BREEZE_GAIN;
+    u.drift.value.x = g(`${name}Drift`) * m.driftGain + bx * follow;
+    u.drift.value.y = by * follow;
     u.coverage.value = m.coverageAtDefault - (g(`${name}Density`) - DEFAULTS[`${name}Density`]) * DENSITY_TO_COVERAGE;
     u.tint.value.setRGB(BASE[name].tint.r * lit[0]!, BASE[name].tint.g * lit[1]!, BASE[name].tint.b * lit[2]!);
     u.shade.value.setRGB(BASE[name].shade.r * shade[0]!, BASE[name].shade.g * shade[1]!, BASE[name].shade.b * shade[2]!);

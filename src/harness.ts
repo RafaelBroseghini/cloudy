@@ -1,4 +1,4 @@
-import type { P, WeatherReport, WeatherState } from "./params/index.ts";
+import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
 import { BLOB, BLOB_STRIDE, type Params, type SceneName } from "./sim/index.ts";
 
@@ -60,6 +60,12 @@ export interface GameHarnessApi {
   holdFlash(tau: number | null): void;
   /** The full flat resolved parameter record (numbers), as the game sees it now. */
   resolved(): P;
+  /** Dev layer (above weather and user, below the strike flash; any field, interaction included): set overrides, clamped to each field's range. */
+  setDev(partial: Layer): void;
+  /** Remove dev overrides for `keys` (all when omitted); those fields fall back to weather/scene/defaults. */
+  clearDev(keys?: FieldKey[]): void;
+  /** The current dev overrides (a copy, as stored: range-clamped; the gate gap is applied only in `resolved()`). */
+  getDev(): Layer;
   /** The sim's interaction params: the resolved weather values (or what `setParams` last wrote). */
   getParams(): Params;
   setParams(partial: Partial<Params>): void;

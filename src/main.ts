@@ -1,4 +1,5 @@
 import { createAudioEngine, installUnlock } from "./audio/engine.ts";
+import { installDevPanel, isTypingTarget } from "./dev/toggle.ts";
 import { createPointerInput } from "./input/pointer.ts";
 import { createDriveRunner, parseWeatherParam, reportWeather, WEATHER_STATES } from "./params/index.ts";
 import { flashLayer, createStrikeDirector } from "./strikes/index.ts";
@@ -89,10 +90,10 @@ async function main(): Promise<void> {
   };
   pushLook();
   window.addEventListener("keydown", (e) => {
-    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target)) return;
     const state = WEATHER_STATES[Number(e.key) - 1];
     if (state) drive.setWeather(state, KEY_TRANSITION_S);
-  });
+  }, true); // capture: the dev panel's controls stop keydown bubbling, and 1..4 must still work with one focused
 
   let paused = false;
   let ready = false;
@@ -108,13 +109,18 @@ async function main(): Promise<void> {
     scene.setBlobs(blobs, sim.writeBlobs(blobs));
     const c = sim.snapshot().cursor;
     scene.setCursor(c.present ? { x: c.x, y: c.y } : null);
+    const air = sim.flowState();
+    scene.setAir(air.x, air.y);
   };
 
   /** One fixed step of the world: weather time advances with the sim, so ticks and rAF stay in lockstep. */
+  let simStepMs = 0;
   const stepWorld = (): void => {
     drive.step(FIXED_DT);
     strikes.step(FIXED_DT, drive.drive.p.strikesEnabled, drive.drive.p.strikeRate);
+    const t0 = performance.now();
     sim.step();
+    simStepMs += (performance.now() - t0 - simStepMs) * 0.05; // EMA for the dev panel's stats line
   };
   const stepFixed = (n: number): void => {
     for (let i = 0; i < n; i++) stepWorld();
@@ -190,6 +196,15 @@ async function main(): Promise<void> {
       present();
     },
     resolved: () => ({ ...drive.drive.p }),
+    setDev(partial) {
+      drive.setDev(partial);
+      present();
+    },
+    clearDev(keys) {
+      drive.clearDev(keys);
+      present();
+    },
+    getDev: () => ({ ...drive.drive.layers.dev }),
     getParams: () => sim.getParams(),
     setParams: (partial) => sim.setParams(partial),
     cloudCentres() {
@@ -199,6 +214,7 @@ async function main(): Promise<void> {
     constants: () => ({ cloudThreshold: CLOUD_THRESHOLD, influenceFactor: INFLUENCE_FACTOR }),
   };
   installHarness(harness);
+  installDevPanel({ api: harness, simStepMs: () => simStepMs });
 
   let lastMs: number | null = null;
   let lastRenderMs = -Infinity;
