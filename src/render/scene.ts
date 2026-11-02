@@ -1,5 +1,5 @@
 import { RenderPipeline, Vector2, type WebGPURenderer } from "three/webgpu";
-import { float, Fn, length, mix, screenUV, smoothstep, uniform, vec2, vec3, vec4 } from "three/tsl";
+import { exp, float, Fn, length, mix, screenUV, smoothstep, uniform, vec2, vec3, vec4 } from "three/tsl";
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { createCloudLook, createFieldTarget, createSplatPass, sampleFieldDensity, shadeClouds } from "./cloudField.ts";
 import { applyLook } from "./look.ts";
@@ -33,8 +33,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   const cursorActive = uniform(0);
   const cursorRadius = uniform(0.45);
 
-  /** Post grade: `exposure` scales the scene colour, `flash` blends toward white (lightning, M3). */
-  const post = { exposure: uniform(1), flash: uniform(0) };
+  /** Post grade: `exposure` scales the scene colour; `flash` (0..1) and `flashX` (screen x, 0..1) are the lightning (M3). */
+  const post = { exposure: uniform(1), flash: uniform(0), flashX: uniform(0.5) };
+  // Cool white-blue, a touch brighter than the sky so the lift reads as light, not as a grey wash.
+  const flashTint = vec3(0.78, 0.88, 1.0);
 
   const clouds = shadeClouds(target.texture, look, time, aspect);
   const scenery = createScenery();
@@ -63,16 +65,22 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const mid = scenery.mid(wp, sceneryCtx);
     const behindMid = mix(behindRain, mid.rgb, mid.a);
     const rainMid = rain.mid(wp, sky.horizon, float(0));
-    const behindPlay = mix(behindMid, rainMid.rgb, rainMid.a);
+    const behindPlay0 = mix(behindMid, rainMid.rgb, rainMid.a);
+    // Lightning: a soft pool of light around the strike x (wide, centred a little above the middle), a gentle lift
+    // everywhere else. Sky and scenery brighten; the play clouds are lit from inside, including their dark undersides.
+    const gx = uvUp.x.sub(post.flashX).mul(aspect);
+    const gy = uvUp.y.sub(0.55);
+    const pool = exp(gx.mul(gx).div(0.2).add(gy.mul(gy).div(0.35)).negate());
+    const behindPlay = behindPlay0.mul(post.flash.mul(0.3).add(1)).add(flashTint.mul(post.flash.mul(pool.mul(0.3).add(0.05))));
     const c = clouds(wp);
-    const playOver = mix(behindPlay, c.rgb, c.a);
+    const cloudRgb = c.rgb.add(flashTint.mul(post.flash.mul(pool.mul(0.5).add(0.1))));
+    const playOver = mix(behindPlay, cloudRgb, c.a);
     const near = scenery.near(wp, sceneryCtx);
     const withNear = mix(playOver, near.rgb, near.a);
     const onPlay = smoothstep(0.0, look.threshold.mul(1.4), sceneryCtx.fieldDensity(wp));
     const rainNear = rain.near(wp, sky.horizon, onPlay);
     const withRain = mix(withNear, rainNear.rgb, rainNear.a);
-    const withClouds = mix(withRain.mul(post.exposure), vec3(1), post.flash.mul(0.75));
-    
+    const withClouds = withRain.mul(post.exposure).add(flashTint.mul(post.flash.mul(0.04)));
     // Soft ring: bright band over a wider faint blue halo so it reads on both sky and cloud.
     const d = length(wp.sub(cursorPos)).sub(cursorRadius).abs();
     const band = float(1).sub(smoothstep(0, 0.06, d));
@@ -108,7 +116,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     layers: scenery.layers,
     /** Rain streak uniforms and look; see rain.ts. Render-only. */
     rain,
-    /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1). */
+    /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1), `flashX` (0..1 screen x of the glow). */
     post,
     /** Current scenery parallax shift in world units (the play layer ignores it). */
     parallax: scenery.parallax.value,

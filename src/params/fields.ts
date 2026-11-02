@@ -74,7 +74,7 @@ export const FIELD_SPECS = {
   ...scenery('far', 0.5, 0.3, 0.01, 0.5),
   ...scenery('mid', 0.7, 0.2, 0.02, 0.5),
   ...scenery('near', 0.35, 0.1, 0.05, 0.3),
-  // weather (strikeRate, strikesEnabled and vortexStrength are placeholders for M3/M4)
+  // weather (vortexStrength is a placeholder for M4)
   rainRate: f('weather', 0, 1, 0),
   rainAngle: f('weather', -0.8, 0.8, 0),
   rainSpeed: f('weather', 2, 30, 12),
@@ -86,6 +86,8 @@ export const FIELD_SPECS = {
   // postfx
   fxExposure: f('postfx', 0.25, 2, 1),
   fxFlash: f('postfx', 0, 1, 0),
+  /** Screen x (0 left .. 1 right) of the flash's local glow. */
+  fxFlashX: f('postfx', 0, 1, 0.5),
 } as const satisfies Record<string, FieldSpec>
 
 export type FieldKey = keyof typeof FIELD_SPECS

@@ -1,5 +1,7 @@
+import { createAudioEngine, installUnlock } from "./audio/engine.ts";
 import { createPointerInput } from "./input/pointer.ts";
 import { createDriveRunner, parseWeatherParam, reportWeather, WEATHER_STATES } from "./params/index.ts";
+import { flashLayer, createStrikeDirector } from "./strikes/index.ts";
 import { applyLook } from "./render/look.ts";
 import { createRenderer } from "./render/renderer.ts";
 import { createScene } from "./render/scene.ts";
@@ -19,6 +21,8 @@ const RENDER_INTERVAL_MS = 1000 / 60;
 const RENDER_SLACK_MS = 2;
 /** Dev shortcut: keys 1..4 blend to clear, rain, thunder, tornado over this many seconds. */
 const KEY_TRANSITION_S = 4;
+/** Seed of the strike process: a run replays the same strikes for a seed. */
+const STRIKE_SEED = 20260;
 
 async function main(): Promise<void> {
   const canvasHost = document.getElementById("app");
@@ -52,6 +56,28 @@ async function main(): Promise<void> {
 
   // Weather: the drive resolves P (defaults + scene + weather) and pushes interaction params and wind to the sim.
   const drive = createDriveRunner(sim, {}, parseWeatherParam(location.search));
+
+  // Lightning: one strike record feeds the flash (transient layer, post-FX only) and the thunder (Web Audio).
+  const audio = createAudioEngine(import.meta.env.BASE_URL);
+  installUnlock(audio);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const strikes = createStrikeDirector(STRIKE_SEED, {
+    clocks: audio.clocks,
+    latency: audio.latency,
+    currentTime: audio.currentTime,
+    thunder: audio.thunder,
+    reducedMotion: () => reducedMotion.matches,
+  });
+  let flashValue = 0;
+  let flashX = 0.5;
+  /** Per rendered frame: read the flash off the clock and write it to the transient layer, only while it changes. */
+  const updateFlash = (): void => {
+    const f = strikes.flash();
+    if (f.value === flashValue && (f.value === 0 || f.x === flashX)) return;
+    flashValue = f.value;
+    flashX = f.x;
+    drive.setLayers({ transient: flashLayer(f) });
+  };
   const stepper = createFixedStepper();
   let lookP: unknown = null;
   /** CPU-side look push: uniforms only, and only when the resolved params changed. */
@@ -87,6 +113,7 @@ async function main(): Promise<void> {
   /** One fixed step of the world: weather time advances with the sim, so ticks and rAF stay in lockstep. */
   const stepWorld = (): void => {
     drive.step(FIXED_DT);
+    strikes.step(FIXED_DT, drive.drive.p.strikesEnabled, drive.drive.p.strikeRate);
     sim.step();
   };
   const stepFixed = (n: number): void => {
@@ -110,6 +137,8 @@ async function main(): Promise<void> {
         view: { width: viewWidth(window.innerWidth / window.innerHeight), height: VIEW_HEIGHT },
         weather: reportWeather(drive.drive.weather),
         rainRate: drive.drive.p.rainRate,
+        audio: audio.report(),
+        strikes: { count: strikes.count, last: strikes.last },
       };
     },
     pause(on) {
@@ -148,6 +177,18 @@ async function main(): Promise<void> {
       drive.setWeather(state, seconds);
       present();
     },
+    forceStrike(o) {
+      const rec = strikes.force(o);
+      updateFlash();
+      present();
+      return rec;
+    },
+    flash: () => strikes.flash().value,
+    holdFlash(tau) {
+      strikes.hold(tau);
+      updateFlash();
+      present();
+    },
     resolved: () => ({ ...drive.drive.p }),
     getParams: () => sim.getParams(),
     setParams: (partial) => sim.setParams(partial),
@@ -173,6 +214,7 @@ async function main(): Promise<void> {
     if (ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
     const renderDt = Number.isFinite(lastRenderMs) ? (ms - lastRenderMs) / 1000 : 0;
     lastRenderMs = ms;
+    updateFlash();
     present();
     const ptr = currentPointer();
     scene.updateScenery(ptr.kind === "present" ? { x: ptr.x, y: ptr.y } : null, renderDt);

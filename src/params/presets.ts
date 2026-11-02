@@ -45,7 +45,7 @@ export const WEATHER_PRESETS: Readonly<Record<WeatherState, Layer>> = {
     blobDamping: 3,
   },
   // Darker and heavier than rain: near-black blue sky, bright cloud tops over very dark undersides, thin hazy banks;
-  // stiff clouds that tear sooner and snap harder; strikes enabled (rate unused until M3).
+  // stiff clouds that tear sooner and snap harder; a strike about every 10 s (mean gap 1 / strikeRate, never under 0.35 of it).
   thunder: {
     ...col('skyTop', '#232c3b'),
     ...col('skyHorizon', '#465264'),
@@ -69,7 +69,7 @@ export const WEATHER_PRESETS: Readonly<Record<WeatherState, Layer>> = {
     rainAngle: 0.15,
     rainSpeed: 16,
     windX: 0.5,
-    strikeRate: 0.15,
+    strikeRate: 0.1,
     strikesEnabled: 1,
     fxExposure: 0.85,
     k_r: 150,

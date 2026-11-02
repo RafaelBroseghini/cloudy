@@ -16,8 +16,8 @@
 - `sky`: `skyTop/Horizon/Bottom/Sun{R,G,B}` (linear RGB), horizon height, sun x/y/size/strength.
 - `lighting`: `lightDirX/Y`, `lightGain`, `lightAmbient`, `cloudLit/Mid/Shade{R,G,B}`.
 - `scenery`: `far`, `mid`, `near` x `Opacity|Tint|Drift|Density`. Render-only.
-- `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (0, M3), `strikesEnabled`.
-- `postfx`: `fxExposure`, `fxFlash` (0).
+- `weather`: `rainRate/Angle/Speed`, `windX/Y`, `vortexStrength` (0, M4), `strikeRate` (strikes per second, mean), `strikesEnabled` (step).
+- `postfx`: `fxExposure`, `fxFlash` (0), `fxFlashX` (0.5: screen x of the flash glow).
 
 Defaults match today's `sky.ts` / `cloudField.ts` uniforms (hex converted to linear RGB).
 
@@ -33,7 +33,7 @@ Defaults match today's `sky.ts` / `cloudField.ts` uniforms (hex converted to lin
 
 - `clear`: sets nothing: today's look and defaults.
 - `rain`: grey low-contrast sky, denser banks, `rainRate` 0.7; heavier clouds (more drag and creep, softer springs).
-- `thunder`: darker, `rainRate` 0.9, stiffer springs, splits sooner, `strikeRate` placeholder 0.15, `strikesEnabled` 1.
+- `thunder`: darker, `rainRate` 0.9, stiffer springs, splits sooner, `strikeRate` 0.1 (a strike about every 10 s), `strikesEnabled` 1.
 - `tornado`: green-grey sky, strong wind, weaker springs, `vortexStrength` placeholder 0.6.
 
 ## Integration (as wired)
@@ -68,3 +68,14 @@ Stateless analytic streaks in the composite shader: no particles, no compute, no
 ## Look tuning (rain, thunder, tornado)
 
 The play clouds keep contrast by making the sky darker than their lit tops (`cloudLit` near white, `lightGain` 3.4-3.6, dark `cloudShade` undersides), while scenery banks get hazier: lower `*Opacity`, higher `*Tint` (blend toward the sky horizon colour).
+
+## Strikes (M3: `src/strikes` pure, `src/audio` Web Audio)
+
+One strike record `{ id, tStrike, clock, intensity, d, x, pick, pitch }` feeds the flash and the thunder.
+
+- Scheduler: seeded, stepped once per fixed sim step with the resolved `strikesEnabled` / `strikeRate`. A strike fires when the integral of `strikeRate` reaches `0.35 + Exp(0.65)` (mean gap `1 / strikeRate`, never under `0.35 / strikeRate`). Disabled or rate 0: none. `d` 0.4..3 s, softer when longer; `x` 0.1..0.9.
+- Clocks: the strike lives on the AudioContext render clock R while the context is running, else on `performance.now()` (flash only, thunder skipped as `locked`). R is `getOutputTimestamp()` (the heard clock: `contextTime + (perf - performanceTime)`) plus `outputLatency` (else `baseLatency`, else 0), because that timestamp names the sample leaving the speaker now; without `getOutputTimestamp` it is `currentTime` plus the time since it last ticked. `tStrike` = R now + 0.1 s.
+- Timing: the flash PEAK is `tStrike`. Thunder starts at `tStrike + d - latency` and is heard at `tStrike + d`, so heard minus flash peak is `d` for any latency. A start before `max(R, currentTime)` or a heard time already past is skipped (`late`); never played late.
+- Envelope `E(tau)`, `tau = t - tStrike`: 0 before `-0.04`; smoothstep rise 0.04 s to 1 at `tau = 0`; flickers peaking 0.7 at 0.12 s and 0.4 at 0.27 s (decays 0.09, 0.12, 0.15 s) over a 0.3 afterglow (0.45 s decay); 0 from 2 s. `prefers-reduced-motion`: one 0.1 s rise to 0.45, 0.4 s decay, no flicker.
+- Flash: `fxFlash = max_i intensity_i * E` and `fxFlashX` of the strongest, written through the transient layer (`setLayers({ transient })`), so interaction fields cannot change. Composite shader: sky and scenery lifted (x1.3 plus a cool tint and a wide soft pool at `fxFlashX`), play clouds get an additive blue-white light inside the pool and a little everywhere, so dark undersides light up. Uniforms only.
+- Thunder: one of `public/audio/thunder.json`'s clips per strike, rate 0.85..1.1, gain `0.2 + 0.8 * intensity^1.5`, low-pass 16 kHz (near) down to 1.2 kHz (far), at most 3 voices (`voice-cap`). Clips are decoded once, after the first gesture. No navigator audio session API is used (a test greps `src/`), so iOS keeps the silent switch and mixes with other audio.

@@ -1,4 +1,5 @@
 import type { P, WeatherReport, WeatherState } from "./params/index.ts";
+import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
 import { BLOB, BLOB_STRIDE, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
@@ -21,6 +22,10 @@ export interface GameState {
   weather: WeatherReport;
   /** Resolved `rainRate` (0..1) right now. */
   rainRate: number;
+  /** AudioContext `state` ("none" until the first gesture) and its output latency in seconds (null if unknown). */
+  audio: { state: string; outputLatency: number | null };
+  /** Strikes fired so far and the latest one's record. */
+  strikes: { count: number; last: StrikeReport | null };
 }
 
 export interface CloudCentre {
@@ -47,6 +52,12 @@ export interface GameHarnessApi {
   loadScene(name: SceneName): void;
   /** Blend to `state` over `seconds` of weather time (0 = at once). Weather time advances with sim steps. */
   setWeather(state: WeatherState, seconds: number): void;
+  /** Fire a strike now. `intensity` 0..1, `d` seconds from flash to thunder, `x` 0..1 across the screen; missing fields are drawn. */
+  forceStrike(o?: StrikeForce): StrikeReport;
+  /** The current flash value (0..1), read off the strike clock. */
+  flash(): number;
+  /** Freeze the latest strike's flash at `tau` seconds from its peak (negative = during the rise); null releases. For screenshots. */
+  holdFlash(tau: number | null): void;
   /** The full flat resolved parameter record (numbers), as the game sees it now. */
   resolved(): P;
   /** The sim's interaction params: the resolved weather values (or what `setParams` last wrote). */
