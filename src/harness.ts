@@ -2,6 +2,7 @@ import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/i
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
 import type { TierName } from "./render/tier.ts";
 import type { Randomized, SceneId, SceneRef, Settings, SliderKey, SliderState, SliderValues } from "./settings/index.ts";
+import type { UiReport } from "./ui/model.ts";
 import { CLOUD_TYPES, summarizeClouds, type CloudType, type Params, type SceneName } from "./sim/index.ts";
 
 export interface GameState {
@@ -80,6 +81,10 @@ export interface GameHarnessApi {
   resetSettings(): void;
   /** Per slider: effective 0..1 `value`, whether the player `set` it, whether it is `enabled` (thunder: thunder weather only) and its friendly `word`. */
   sliderState(): Record<SliderKey, SliderState>;
+  /** The Sky panel: `{ ready, open, weather, scene, subtitle, sliders: [{ key, label, value, word, disabled, set }] }` as painted now. `ready` is false until the panel (a lazy chunk) is built. */
+  ui(): UiReport;
+  /** Unfold or fold the Sky panel (remembered across loads on desktop; applied when the panel is built if it is not yet). */
+  setPanelOpen(open: boolean): void;
   /** Fire a strike now. `intensity` 0..1, `d` seconds from flash to thunder, `x` 0..1 across the screen; missing fields are drawn. */
   forceStrike(o?: StrikeForce): StrikeReport;
   /** The current flash value (0..1), read off the strike clock. */

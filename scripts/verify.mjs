@@ -131,6 +131,9 @@ const STEPS = {
     ${snap}`),
   empty: game(`g.loadScene("empty"); g.tick(500); ${snap}`),
   params: game(`return JSON.stringify(g.getParams())`),
+  // The Sky panel is a lazy chunk, so ui() reports ready:false for a moment after load.
+  ui: game(`return JSON.stringify(g.ui())`),
+  panelOpen: (open) => game(`g.setPanelOpen(${open}); return JSON.stringify(g.ui())`),
   // Rain at once (0 s blend). Desktop reloads m1 first, since the earlier steps left the sim empty.
   rain: (ms, reload) => game(`
     ${reload ? `g.pointerAbsent(); g.loadScene("m1");` : ""} g.setWeather("rain", 0); g.tick(${ms});
@@ -259,6 +262,25 @@ async function runPass(pass, report) {
     }
     await sleep(300) // a frame or two of the loaded scene
     shot("initial")
+
+    // Sky panel: built after the game is ready, folded on the phone, seven sliders, thunder off outside thunder weather.
+    let ui = ab.json(STEPS.ui)
+    for (let i = 0; i < 20 && !ui.ready; i++) {
+      await sleep(500)
+      ui = ab.json(STEPS.ui)
+    }
+    expect(ui.ready, "the Sky panel never became ready")
+    expect(ui.open === !pass.smoke, `the Sky panel starts ${ui.open ? "open" : "folded"} on ${pass.name}, expected ${pass.smoke ? "folded (phone)" : "open"}`)
+    expect(ui.sliders.length === 7, `the Sky panel has ${ui.sliders.length} sliders, expected 7`)
+    const th = ui.sliders.find((r) => r.key === "thunder")
+    expect(th && th.disabled && th.word === "Storm weather only", `the thunder slider outside thunder weather: ${JSON.stringify(th)}`)
+    if (pass.smoke) {
+      ab.json(STEPS.panelOpen(true))
+      await sleep(400)
+    }
+    shot("panel")
+    if (pass.smoke) ab.json(STEPS.panelOpen(false))
+
     if (pass.smoke) {
       const rain = ab.json(STEPS.rain(500, false))
       expect(rain.rainRate > 0, `rain on the phone has rainRate ${rain.rainRate}`)
@@ -368,6 +390,13 @@ async function runPass(pass, report) {
     const wx = (px / pass.w - 0.5) * real.view.width, wy = (0.5 - py / pass.h) * real.view.height
     expect(real.cursor.present, `a real mouse move to ${px},${py} left the cursor absent`)
     expect(Math.hypot(real.cursor.x - wx, real.cursor.y - wy) < 0.3, `real mouse at ${px},${py} should put the cursor near (${wx.toFixed(2)}, ${wy.toFixed(2)}), got (${real.cursor.x.toFixed(2)}, ${real.cursor.y.toFixed(2)})`)
+
+    // Over the panel the sim cursor is absent (the panel is above the canvas, so the canvas gets pointerleave).
+    ab.json(STEPS.panelOpen(true))
+    ab.run("mouse", "move", "200", "300")
+    await sleep(200)
+    const over = ab.json(STEPS.realInput)
+    expect(!over.cursor.present, "the sim cursor is still present with the real mouse over the Sky panel")
 
     await sleep(500)
     const later = ab.json(STEPS.state)

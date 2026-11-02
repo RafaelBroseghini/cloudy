@@ -8,6 +8,7 @@
     "exactOptionalPropertyTypes": false,
     "allowImportingTsExtensions": true,
     "noEmit": true,
+    "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]

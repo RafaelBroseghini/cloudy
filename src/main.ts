@@ -27,6 +27,7 @@ import {
 import { CLOUD_THRESHOLD, createBlobBuffer, createSim, INFLUENCE_FACTOR, FIXED_DT, summarizeClouds, type Pointer, type SceneName } from "./sim/index.ts";
 import { createFixedStepper } from "./sim/fixedStep.ts";
 import { mulberry32 } from "./sim/scene.ts";
+import type { SkyPanel, SkyPanelHost } from "./ui/panel.ts";
 
 /** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
 const RENDER_INTERVAL_MS = 1000 / 60;
@@ -147,6 +148,10 @@ async function main(): Promise<void> {
     const state = WEATHER_STATES[Number(e.key) - 1];
     if (state) drive.setWeather(state, KEY_TRANSITION_S);
   }, true); // capture: the dev panel's controls stop keydown bubbling, and 1..4 must still work with one focused
+
+  // The Sky panel is its own lazy chunk (DOM, CSS, fonts, Motion), built once the game is ready.
+  let skyPanel: SkyPanel | null = null;
+  let panelWantsOpen: boolean | null = null;
 
   let paused = false;
   let ready = false;
@@ -271,6 +276,22 @@ async function main(): Promise<void> {
       present();
     },
     sliderState: () => settings.sliderState(),
+    ui() {
+      return (
+        skyPanel?.report() ?? {
+          ready: false,
+          open: false,
+          weather: targetWeather(drive.drive.weather),
+          scene: settings.get().scene,
+          subtitle: "",
+          sliders: [],
+        }
+      );
+    },
+    setPanelOpen(open) {
+      panelWantsOpen = open;
+      skyPanel?.setOpen(open);
+    },
     forceStrike(o) {
       const rec = strikes.force(o);
       updateFlash();
@@ -323,6 +344,7 @@ async function main(): Promise<void> {
     lastRenderMs = ms;
     updateFlash();
     present();
+    skyPanel?.sync();
     const ptr = currentPointer();
     scene.updateScenery(ptr.kind === "present" ? { x: ptr.x, y: ptr.y } : null, renderDt);
     scene.setTime(ms / 1000);
@@ -331,6 +353,26 @@ async function main(): Promise<void> {
   });
 
   ready = true;
+
+  // The panel only talks to the settings controller (UI -> controller -> game) and reads back what it shows.
+  const panelHost: SkyPanelHost = {
+    settings: () => settings.get(),
+    sliderState: () => settings.sliderState(),
+    weather: () => targetWeather(drive.drive.weather),
+    resolved: () => drive.drive.p,
+    setSlider: (k, v) => settings.setSlider(k, v),
+    clearSlider: (k) => settings.clearSlider(k),
+    applyScene: (id) => settings.applyScene(id),
+    setWeatherPreset: (state) => settings.setWeatherPreset(state),
+    randomize: () => void settings.randomize(Math.random),
+    reset: () => settings.reset(),
+  };
+  import("./ui/panel.ts")
+    .then(({ createSkyPanel }) => {
+      skyPanel = createSkyPanel(panelHost);
+      if (panelWantsOpen !== null) skyPanel.setOpen(panelWantsOpen);
+    })
+    .catch((err: unknown) => console.error("sky panel failed to load", err));
 }
 
 void main();

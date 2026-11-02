@@ -61,6 +61,7 @@ Drive and read state through `window.__GAME__` (`src/harness.ts`), never by scra
 - `docs/SIM.md`: how the sim maps onto Box2D, where it departs from PLAN, and every param.
 - `docs/PARAMS.md`: layer order and the dev panel (`` ` `` or `?dev` opens it; tune any field live).
 - `docs/SETTINGS.md`: the player sliders, scenes, randomize and saved-settings format (`src/settings`).
+- `docs/UI.md`: the Sky panel (structure, tokens, a11y, state flow, reduced motion).
 - `docs/RENDER.md`: render passes, how clouds are lit as 2.5D volumes, quality tiers and costs.
 - `docs/HARNESS.md`: the full `window.__GAME__` API with a split-then-merge example.
 - `.agents/skills/verify`: browser verification (real WebGPU needs a visible window under WSLg).

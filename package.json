@@ -13,8 +13,11 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
+    "@fontsource/fredoka": "5.3.0",
+    "@fontsource/nunito": "5.3.0",
     "box2d3-wasm": "6.0.0",
     "lil-gui": "0.21.0",
+    "motion": "14.9.0",
     "simplex-noise": "4.0.3",
     "three": "0.187.0",
     "valibot": "1.5.0"
@@ -24,6 +27,7 @@
     "@types/three": "^0.187.0",
     "agent-browser": "^0.41.1",
     "fast-check": "^4.10.2",
+    "happy-dom": "20.14.5",
     "oxlint": "^1.90.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
