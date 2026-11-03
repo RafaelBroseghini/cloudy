@@ -90,7 +90,7 @@ Gameplay is identical on every tier. Tiers change the pixel ratio cap, the cloud
 | M4 | not started: tornado vortex, debris and swirl (the breeze in Extra is ambient, not the vortex). Last, by explicit decision; also revisit `softSpeed` and `WIND_ACCEL_GAIN` |
 | M5 | done: six preset scenes, seven player sliders, dice randomize, saved settings with Valibot validation, Sky panel |
 | M6 | done: bloom and a 3D LUT grade per weather (`docs/RENDER.md`). Sunset and purple dusk come from the time-of-day slider |
-| M7 | partly done: the `hi`/`mid`/`low` tiers exist (Extra). Not started: frame-time governor, automatic tier switching, real-device checks (iPhone, Android phone, iPad) |
+| M7 | partly done: the `hi`/`mid`/`low` tiers exist (Extra), and `?stats` reads frame times on a real device (`docs/RENDER.md`). Not started: frame-time governor, automatic tier switching, real-device checks (iPhone, Android phone, iPad) |
 | Later | TLA+ model (invariants listed below) |
 
 Not built yet, in build order: M7's governor, automatic tiers and device checks; the TLA+ model; M4 last. Also not built and not scheduled: the analytic (Preetham) sky; the sky is the gradient model only.
