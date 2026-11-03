@@ -70,44 +70,42 @@ export const FIELD_SPECS = {
   /** Where the sun sits along the view axis: 1 in front of the viewer (lit faces toward us), 0 at the side, -1 behind the clouds (silver linings). */
   skySunDepth: f('sky', -1, 1, 0.35),
   // lighting
-  /** Shadow contrast of the play clouds (the light direction itself comes from the sky's sun). */
+  /** Shadow contrast of the lit scenery layers (the play clouds' sunlight is `volSunGain`; the light direction is the sky's sun). */
   lightGain: f('lighting', 0, 6, 2.6),
   lightAmbient: f('lighting', 0, 1, 0),
   ...rgb('lighting', 'cloudLit', '#ffffff'),
   ...rgb('lighting', 'cloudMid', '#dfe9f6'),
   ...rgb('lighting', 'cloudShade', '#9fb3d6'),
-  // volume: how the play layer's thickness map is lit (2.5D impostor, src/render/volume.ts). Render-only; the light-march
-  // step counts come from the quality tier, not from here.
-  /** Extinction per world unit along the light march: higher = deeper, darker shadows inside a cloud. */
-  volSigma: f('volume', 0.3, 4, 1.5),
-  /** How far (world units) the light march reaches toward the sun. */
-  volReach: f('volume', 0.5, 5, 2.4),
-  /** Normal strength from the thickness map: 0 = flat card, 1 = full relief. */
-  volRelief: f('volume', 0, 5, 3),
-  /** Wrapped diffuse: how far light bends around the terminator (0 = hard, 1 = fully wrapped). */
-  volWrap: f('volume', 0, 1, 0.55),
-  /** Powder effect: thin lit edges darken (0 = off). */
-  volPowder: f('volume', 0, 1, 0.35),
+  // volume: the play clouds as real volumes (src/render/volume.ts). Render-only; the step counts and scattering octaves
+  // come from the quality tier, not from here. Defaults are the look the spike was tuned to in clear weather.
+  /** Extinction per world unit: higher = denser, darker cores and deeper shadows, a softer lit skin. */
+  volSigma: f('volume', 2, 40, 12),
+  /** How far (world units) the march toward the sun reaches. */
+  volReach: f('volume', 0.5, 6, 2.8),
+  /** Sunlight strength on the clouds (the light direction itself comes from the sky's sun). */
+  volSunGain: f('volume', 0, 6, 1.5),
+  /** Erosion strength: how deeply the baked noise carves billows into the sim's silhouette (0 = smooth ellipsoids). Noise only subtracts, so the contour never grows. */
+  volErosion: f('volume', 0, 1.5, 0.7),
+  /** Billow size: the noise period in world units (bigger = fewer, rounder lumps), scaled with the clouds' own size on small screens. */
+  volLumpScale: f('volume', 1, 8, 2.4),
+  /** How flat the underside of cumulus and cumulonimbus is (0 = round all over, 1 = a thin, flat base). */
+  volFlatBase: f('volume', 0, 1, 0.4),
+  /** Powder effect: the thin, low-density skin scatters less toward the viewer (0 = off). */
+  volPowder: f('volume', 0, 1, 0.6),
   /** Forward-scatter anisotropy of the phase function (Henyey-Greenstein g). */
-  volPhaseG: f('volume', 0, 0.95, 0.62),
-  /** Multiple scattering: how much of the light survives each scattering octave (0 = shadows go dark, 0.9 = very soft). */
-  volMultiScatter: f('volume', 0, 0.9, 0.6),
-  /** Sky-light fill in shadowed parts (multiplies the ambient bounce). */
-  volAmbient: f('volume', 0, 2, 0.7),
-  /** Ambient occlusion in the pits between billows. */
-  volAO: f('volume', 0, 1, 0.7),
-  /** Billow (lump) size in blob radii; bigger = fewer, rounder lumps. */
-  volLumpScale: f('volume', 1, 8, 2.2),
-  /** How much the lumps carve the thickness (0 = smooth domes, 1 = deep billows). */
-  volLumpStrength: f('volume', 0, 1, 0.55),
-  /** Radius of each blob's dome in blob radii: small = each blob reads as its own bump, large = one smooth mass. */
-  volDome: f('volume', 0.7, 2, 1.5),
-  /** Half-thickness (in blob radii) of each cloud type: how deep a cloud is along the view axis. */
-  volHeightCumulus: f('volume', 0.1, 3, 1.2),
-  volHeightStratus: f('volume', 0.1, 3, 0.7),
-  volHeightNimbus: f('volume', 0.1, 3, 1.6),
+  volPhaseG: f('volume', 0, 0.95, 0.72),
+  /** Multiple scattering: gain of the second scattering octave (0 = shadows go dark, 1 = very soft). */
+  volMultiScatter: f('volume', 0, 1, 0.45),
+  /** Sky-light fill in shadowed parts (multiplies the ambient). */
+  volAmbient: f('volume', 0, 2, 0.9),
+  /** Ambient occlusion strength under overhanging parts. */
+  volAO: f('volume', 0, 2, 0.55),
   /** Silver lining: light leaking through thin cloud edges when the sun is behind (needs skySunDepth < 0). */
-  volSilver: f('volume', 0, 4, 1.4),
+  volSilver: f('volume', 0, 4, 1),
+  /** Half-thickness (in blob radii) of each cloud type, and from it how deep a cloud is along the view axis. */
+  volHeightCumulus: f('volume', 0.1, 3, 0.95),
+  volHeightStratus: f('volume', 0.1, 3, 0.38),
+  volHeightNimbus: f('volume', 0.1, 3, 1.7),
   // scenery: far bank, mid clouds, near wisps (render-only)
   ...scenery('far', 0.5, 0.3, 0.01, 0.5),
   ...scenery('mid', 0.7, 0.2, 0.02, 0.5),

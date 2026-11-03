@@ -9,6 +9,7 @@ import {
   WEATHER_STATES,
   createDriveRunner,
   defaultValues,
+  type FieldKey,
   interactionOf,
   resolve,
   startTransition,
@@ -40,7 +41,9 @@ const at = (from: WeatherState, to: WeatherState, progress: number): Weather => 
 const WEATHERS: Weather[] = [...WEATHER_STATES.map((s) => steady(s)), at('clear', 'rain', 0.5), at('rain', 'thunder', 0.3), at('thunder', 'clear', 0.9)]
 
 describe('default settings', () => {
-  // The snapshot is the resolved P taken from the code BEFORE settings existed; it must never be regenerated.
+  // The snapshot is the resolved P taken from the code BEFORE settings existed; it must never be regenerated. The one exception
+  // is the `volume` group: those fields drove the old 2.5D lighting and now drive the volumetric march (src/render/volume.ts),
+  // so their old values are gone from the snapshot and the group is exempt below.
   const snapshot = JSON.parse(readFileSync(new URL('./p.snapshot.json', import.meta.url), 'utf8')) as Record<WeatherState, Record<string, number>>
 
   it('resolve to exactly the P of the game before settings existed (new fields at their defaults)', () => {
@@ -48,7 +51,7 @@ describe('default settings', () => {
       const p = resolveSettings(DEFAULT_SETTINGS, steady(w)) as Record<string, number>
       const old = snapshot[w]
       for (const k of Object.keys(old)) expect(p[k], `${w}.${k}`).toBe(old[k])
-      const added = Object.keys(p).filter((k) => !(k in old))
+      const added = Object.keys(p).filter((k) => !(k in old) && FIELD_SPECS[k as FieldKey].group !== 'volume')
       expect(added.sort()).toEqual(['parallaxStrength', 'squish'])
       expect(p.parallaxStrength).toBe(1)
       expect(p.squish).toBe(1)

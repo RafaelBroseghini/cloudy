@@ -5,7 +5,7 @@
 //
 // Depth cues: atmospheric perspective (`haze` blends toward the sky's horizon colour, far = hazy, low contrast),
 // scale and edge softness by depth, drift speed by depth, parallax (`depth` factor: shift = offset * (1 - depth)),
-// and a faint soft shadow of the play clouds on the layers behind.
+// and a faint soft shadow of the play clouds on the layers behind (read from the volume pass's alpha).
 
 import { Color, HalfFloatType, LinearFilter, NodeMaterial, QuadMesh, RenderTarget, Vector2, Vector3, type Node, type Renderer } from "three/webgpu";
 import {
@@ -27,7 +27,7 @@ import {
 } from "three/tsl";
 import { createParallax } from "./parallax.ts";
 import { VIEW_HEIGHT } from "./view.ts";
-import { extentOf, ign, litTerms, texUV, type VolumeLook } from "./volume.ts";
+import { extentOf, ign, litTerms, texUV, type SceneryLight } from "./sceneryLight.ts";
 
 /** Half thickness (world units) of a layer's densest part: a far bank is a thin hazy slab, the near wisps puffier. */
 const LAYER_Z = { far: 0.55, mid: 0.8, near: 0.5 } as const;
@@ -82,10 +82,8 @@ export type SceneryLayer = ReturnType<typeof createLayerUniforms>;
 
 export interface SceneryContext {
   aspect: Node<"float">;
-  /** Raw play-layer density at a world position. */
-  fieldDensity: (p: Node<"vec2">) => Node<"float">;
-  /** Density at which the play-cloud edge sits. */
-  playThreshold: Node<"float">;
+  /** Coverage (0..1) of the play clouds at a world position: the volume pass's alpha, bilinear from its half-res target. */
+  playBody: (p: Node<"vec2">) => Node<"float">;
   /** Sky horizon colour: the colour distance fades toward. */
   horizon: Node<"color">;
   cursorPos: Node<"vec2">;
@@ -189,7 +187,7 @@ export function createScenery() {
 
   // Lit scenery (quarter-res bake): each layer's thickness goes to one channel of a small target, and the composite lights
   // it with the same terms as the play layer. Far banks are hazier and lower in contrast, so the play clouds stay the focus.
-  const sunGlobal = (vol: VolumeLook) => vol.sunDir;
+  const sunGlobal = (vol: SceneryLight) => vol.sunDir;
   const bakeMaterial = new NodeMaterial();
   const band = (u: SceneryLayer) => (p: Node<"vec2">) => {
     const d = p.y.sub(u.bandCenter).div(u.bandWidth);
@@ -225,7 +223,7 @@ export function createScenery() {
   let bakeAspect: Node<"float"> | null = null;
 
   /** Build the bake pass and return the lit layer functions. Called once by the scene, with its aspect and volume look. */
-  function lit(aspect: Node<"float">, vol: VolumeLook) {
+  function lit(aspect: Node<"float">, vol: SceneryLight) {
     bakeAspect = aspect;
     bakeMaterial.fragmentNode = Fn(() => {
       const uvUp = vec2(screenUV.x, screenUV.y.oneMinus());
@@ -255,7 +253,7 @@ export function createScenery() {
         const shadeAmt = clamp(float(1).sub(direct), 0, 1).mul(mix(float(1), T.ao, 0.8));
         // Soft shadow of the play clouds, offset toward the sun more for layers farther back.
         const reach = float(1).sub(u.depth).max(0).mul(SHADOW_REACH);
-        const playBody = float(1).sub(ctx.fieldDensity(wp.add(sunGlobal(vol).mul(reach))).mul(-0.8).exp());
+        const playBody = ctx.playBody(wp.add(sunGlobal(vol).mul(reach)));
         const shade = max(shadeAmt, playBody.mul(u.shadow));
         let color: Node<"vec3"> = mix(u.tint, u.shade, clamp(shade, 0, 1));
         color = mix(color, ctx.horizon, u.haze);
@@ -263,7 +261,7 @@ export function createScenery() {
         let alpha = coverage.mul(u.opacity).mul(weightOf(index));
         if (name === "near") {
           // Foreground wisps stay off the play clouds and the cursor so play stays readable.
-          const onCloud = smoothstep(0.0, ctx.playThreshold.mul(1.4), ctx.fieldDensity(wp));
+          const onCloud = ctx.playBody(wp);
           const nearCursor = float(1)
             .sub(smoothstep(ctx.cursorRadius, ctx.cursorRadius.add(2.2), wp.sub(ctx.cursorPos).length()))
             .mul(ctx.cursorActive);

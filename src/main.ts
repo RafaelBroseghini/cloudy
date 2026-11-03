@@ -50,8 +50,8 @@ async function main(): Promise<void> {
   const canvas = renderer.domElement;
   canvas.style.touchAction = "none";
 
-  const scene = await createScene(renderer);
-  const sim = await createSim();
+  // The scene's shader compile (GPU driver) and the sim's wasm load (CPU) overlap.
+  const [scene, sim] = await Promise.all([createScene(renderer), createSim()]);
   const input = createPointerInput(canvas);
   const blobs = createBlobBuffer();
 
@@ -156,6 +156,8 @@ async function main(): Promise<void> {
   let paused = false;
   let ready = false;
   let frame = 0;
+  // The harness's GPU timing loop owns the renderer while it runs.
+  let benching = false;
   // Harness override of the live pointer; null means real input.
   let override: Pointer | null = null;
 
@@ -191,6 +193,7 @@ async function main(): Promise<void> {
         ready,
         backend,
         tier: scene.getTier(),
+        render: scene.stats(),
         frame,
         step: s.step,
         paused,
@@ -307,6 +310,14 @@ async function main(): Promise<void> {
     setTier(tier) {
       scene.setTier(tier);
     },
+    async bench(frames) {
+      benching = true;
+      try {
+        return await scene.bench(frames);
+      } finally {
+        benching = false;
+      }
+    },
     resolved: () => ({ ...drive.drive.p }),
     setDev(partial) {
       drive.setDev(partial);
@@ -339,7 +350,7 @@ async function main(): Promise<void> {
     sim.setPointer(currentPointer());
     if (!paused) stepper.advance(elapsed, stepWorld);
 
-    if (ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
+    if (benching || ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
     const renderDt = Number.isFinite(lastRenderMs) ? (ms - lastRenderMs) / 1000 : 0;
     lastRenderMs = ms;
     updateFlash();

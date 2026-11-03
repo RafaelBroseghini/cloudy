@@ -170,7 +170,7 @@ const STEPS = {
       x: r.x, wx: (r.x - 0.5) * s.view.width,
       nimbi: g.cloudCentres().filter((c) => c.type === "cumulonimbus").map((c) => ({ x: c.x, y: c.y })),
     })`),
-  tier: game(`return JSON.stringify({ tier: g.getState().tier })`),
+  tier: game(`const s = g.getState(); return JSON.stringify({ tier: s.tier, render: s.render })`),
   // Headless has no coarse pointer, so a phone-sized load may pick "hi": report what it picked, then set "low" and read it back.
   tierLow: game(`const picked = g.getState().tier; if (picked !== "low") g.setTier("low"); return JSON.stringify({ picked, tier: g.getState().tier })`),
   // Back to the state the real-mouse step has always run in: clear weather, m1, pointer released from the harness.
@@ -228,8 +228,9 @@ async function runPass(pass, report) {
     const t0 = Date.now()
     while (!ready && Date.now() - t0 < READY_TIMEOUT_MS) {
       try {
-        // Scenes are sized to the view, so also wait for the resize to land before loading one.
-        ready = ab.json(`(() => { const s = window.__GAME__?.getState(); return JSON.stringify(!!s && s.ready && Math.abs(s.view.width / s.view.height - ${pass.w / pass.h}) < 0.01) })()`)
+        // Scenes are sized to the view, so also wait for the resize to land before loading one; and for the 3D erosion noise,
+        // which bakes across the first frames (the clouds are smooth ellipsoids until it is done).
+        ready = ab.json(`(() => { const s = window.__GAME__?.getState(); return JSON.stringify(!!s && s.ready && s.render.noiseReady && Math.abs(s.view.width / s.view.height - ${pass.w / pass.h}) < 0.01) })()`)
       } catch {
         // Page still loading.
       }
@@ -378,9 +379,17 @@ async function runPass(pass, report) {
     console.log(`  strike anchor: x ${anchor.x.toFixed(3)} screen = ${anchor.wx.toFixed(2)} units, ${nearest.toFixed(2)} from the nearest of ${anchor.nimbi.length} cumulonimbus centres`)
     expect(nearest <= 3, `a forced strike with no x landed at x ${anchor.wx.toFixed(2)} (screen ${anchor.x.toFixed(3)}), ${nearest.toFixed(2)} units from the nearest cumulonimbus centre`)
 
-    // Tier: desktop is "hi" (not a coarse pointer). The setter is checked on the phone pass.
+    // Tier: desktop is "mid" (not a coarse pointer; hi is opt-in). The setter is checked on the phone pass. The cloud pass's
+    // counters: the tile and blob textures fit PLAN's 16 KiB, no tile list overflowed on a shipped scene, the noise is baked.
     const tier = ab.json(STEPS.tier)
-    expect(tier.tier === "hi", `desktop tier is ${tier.tier}, expected hi`)
+    expect(tier.tier === "mid", `desktop tier is ${tier.tier}, expected mid`)
+    const rs = tier.render
+    console.log(`  render: tier ${rs.tier}, march ${rs.marchPixels} px, upload ${rs.uploadBytes} B (tiles ${rs.tileBytes} B), worst ${rs.worstBlobsPerTile} blobs/tile, dropped ${rs.overflowDropped}`)
+    expect(rs.tier === tier.tier, `render.tier is ${rs.tier}, getState().tier is ${tier.tier}`)
+    expect(rs.uploadBytes > 0 && rs.uploadBytes <= 16384, `cloud upload is ${rs.uploadBytes} bytes per frame, over PLAN's 16 KiB`)
+    expect(rs.marchPixels > 0 && rs.marchPixels <= 500000, `mid march target is ${rs.marchPixels} px, over its 0.5 MP cap`)
+    expect(rs.overflowDropped === 0, `a tile list overflowed on a shipped scene (${rs.overflowDropped} entries dropped)`)
+    expect(rs.noiseReady === true, "the erosion noise is not baked")
     ab.json(STEPS.reset)
 
     // Real mouse through pointer.ts: move the browser's own pointer to a known pixel, no override.

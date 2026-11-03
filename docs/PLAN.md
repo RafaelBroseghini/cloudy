@@ -10,7 +10,7 @@ A 2.5D browser toy played with mouse, trackpad or touch. The cursor pushes throu
 
 | Decision | Consequence |
 | --- | --- |
-| 2.5D: one flat play plane plus parallax layers | Clouds are per-layer 2D fields lit as 2.5D volumes: per-blob hemisphere heights + light marching through the thickness map; no per-blob 3D raymarch. |
+| 2.5D: one flat play plane plus parallax layers | Clouds are rendered as real volumes (per-blob 3D ellipsoids raymarched through tile lists with light marching; the CPU sim stays 2D). The scenery layers stay flat, lit as thin slabs. |
 | Only the middle layer is interactive | One blob sim and one density sampler. Scenery layers are render-only. |
 | Splits persist; pieces always re-merge on touch, in any weather | Breakable springs; merges are gated by hysteresis so pieces do not re-merge right after a split. |
 | Weather changes interaction | One typed parameter set per weather state, blended over time. |
@@ -60,8 +60,8 @@ Weather may change gate values but never disables merging, and `d_touch < d_rele
 3. Resolve P (slider changes, transitions).
 4. Fixed sim steps: sample density, cursor forces, blob step, topology + merge gate.
 5. Strikes: read audio time, schedule thunder, compute flash.
-6. Upload blob data (12 floats per blob: position, size, motion, cloud id, type one-hot) and uniforms.
-7. GPU: sky + scenery, metaball splats (half-res field), cloud shading, rain/debris, composite.
+6. Upload blob data (12 floats per blob: position, size, motion, cloud id, type one-hot; the renderer works on its own copy) plus the tile lists, and uniforms.
+7. GPU: sky + scenery bake, cloud march (half-res), rain/debris, composite.
 8. Govern: frame-time stats; step quality tier with hysteresis.
 
 ## Weather, tornado, audio
@@ -76,7 +76,7 @@ One sky shader evaluates the analytic (Preetham `SkyMesh`) and gradient models a
 
 ## Quality tiers
 
-Gameplay is identical on every tier. Tiers change pixel ratio cap, field/thickness/bake resolution and the light-march step counts (`hi`/`mid`/`low`, `src/render/tier.ts`; `docs/RENDER.md`); they never toggle features, so nothing recompiles. Later tiers may also scale noise octaves, particle counts, bloom, scenery layer count. A frame-time governor steps tiers (no thermal API on phones).
+Gameplay is identical on every tier. Tiers change the pixel ratio cap, the cloud march target size, the scenery bake resolution, and the march's step counts and scattering octaves (`hi`/`mid`/`low`, `src/render/tier.ts`; `docs/RENDER.md`; `mid` is the desktop default); they never toggle features, so nothing recompiles. Later tiers may also scale noise octaves, particle counts, bloom, scenery layer count. A frame-time governor steps tiers (no thermal API on phones).
 
 ## Milestones
 
@@ -86,7 +86,7 @@ Gameplay is identical on every tier. Tiers change pixel ratio cap, field/thickne
 | M1 | done: blob clouds, cursor push with density drag, split and re-merge with hysteresis |
 | M2 | done: weather layers and blending, rain, parallax scenery layers |
 | M3 | done: lightning flash and thunder synced on the audio clock, public-domain recordings |
-| Extra | done, not in the original table: dev tweak panel (`` ` `` or `?dev`), ambient curl-noise breeze with wrap-around, cumulus, stratus and cumulonimbus with per-type multipliers, 2.5D volumetric clouds with light marching and lit scenery, `hi`/`mid`/`low` quality tiers |
+| Extra | done, not in the original table: dev tweak panel (`` ` `` or `?dev`), ambient curl-noise breeze with wrap-around, cumulus, stratus and cumulonimbus with per-type multipliers, real volumetric clouds (tile-list raymarch with light marching) and lit scenery, `hi`/`mid`/`low` quality tiers |
 | M4 | not started: tornado vortex, debris and swirl (the breeze in Extra is ambient, not the vortex). Last, by explicit decision; also revisit `softSpeed` and `WIND_ACCEL_GAIN` |
 | M5 | done: six preset scenes, seven player sliders, dice randomize, saved settings with Valibot validation, Sky panel |
 | M6 | not started: 3D LUT grading and bloom. Sunset and purple dusk already come from the time-of-day slider |
@@ -108,4 +108,4 @@ Not built yet, in build order: M6; M7's governor, automatic tiers and device che
 
 ## Perf targets (proposals, not measurements)
 
-Frame p95 ≤ 16.7 ms over 60 s; CPU sim ≤ 2 ms desktop, 3 ms mobile; upload < 16 KB/frame; zero pipeline compiles after warm-up; zero sync readbacks.
+Frame p95 ≤ 16.7 ms over 60 s; CPU sim ≤ 2 ms desktop, 3 ms mobile; upload at most 16 KiB/frame (16,384 bytes; clouds use 16,288); zero pipeline compiles after warm-up; zero sync readbacks.

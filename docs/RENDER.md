@@ -1,35 +1,43 @@
-# Render: play clouds as 2.5D volumes
+# Render: play clouds as real volumes
 
-Every cloud is a slab: per pixel the renderer knows a half-thickness `H(x, y)` and lights it by marching toward the sun through that thickness map. No per-blob 3D raymarch. The silhouette is still the sim's density contour (`CLOUD_THRESHOLD`, `INFLUENCE_FACTOR`), so what you see is what the sim pushes. Same shaders on WebGPU and WebGL2; everything at runtime is a uniform, pipelines are warmed at load.
+Each blob is a 3D ellipsoid, raymarched through per-tile blob lists with a light march toward the sun. The CPU sim stays 2D and authoritative: the silhouette is the sim's density contour (`CLOUD_THRESHOLD`, `INFLUENCE_FACTOR`, `DENSITY_REF_RADIUS`), the mid plane is pinned to the sim's 2D density, and the baked noise only erodes it (Nubis: noise subtracts, never adds). Same plain fragment TSL on WebGPU and WebGL2 (no compute, no storage buffers, no 3D render targets); every tunable is a uniform, pipelines are warmed at load.
 
-## Passes (per frame, `scene.render()`)
+## Data flow (per frame, `scene.render()`)
 
-1. Density splat (`cloudField.ts`): one instanced quad per blob, additive, field RT. R density, G stratus part, B nimbus part, A height in cloud. Unchanged contract; the blob upload is still the 12 KB sim buffer (plus 1 KB of cloud heights).
-2. Height splat (`volume.ts`): the same instanced geometry (no second upload), second RT. R = sum of `(h / 0.35)^8`, `h = type thickness * radius * hemisphere profile`. `H = A^(1/8)` is a soft max: exact for one blob, smooth where blobs overlap. Stored normalised so stratus stays above half-float underflow.
-3. Detail (field res): `(H, f0, stratus share, nimbus share)`. `f0` is the eroded density the old shader thresholded. `H` is pinched to 0 at that contour (round shoulders), carved by big soft-creased billows (size in blob radii, strongest on sun-facing silhouettes, gentle on sheets and towers) and, for stratus, rolled along its x-streaks.
-4. Scenery bake (quarter res): each scenery layer's thickness into R/G/B.
-5. Composite (full res): play layer shaded from the thickness map: normals from `H`, Beer march toward the sun (`steps`), powder, dual-lobe Henyey-Greenstein phase, 3 multiple-scatter octaves, ring AO, silver lining when the sun is behind, tower base darkening from height-in-cloud. Scenery layers are lit by the same terms with fewer steps, hazier and lower contrast with depth; far banks have no AO.
+1. CPU (`tiles.ts`, pure): the RENDER COPY of the sim's blob buffer (the sim's buffer is only read, never aliased). Layout in `src/sim/blobBuffer.ts`: same 12 floats, slots 4/5 = cloud base/top y, slot 11 = per-slot z offset (integer hash of the slot, so it is stable). z half-extent = `r * INFLUENCE_FACTOR * volHeight*` (cumulus 0.95, stratus 0.38, nimbus 1.7). Then the tile lists: a world-unit grid (about 0.5 units, at most 340 tiles, 23x14 at 1280x800), each tile listing the blobs whose cut-off kernel (q < 0.9), padded for slanted eye rays, can reach it, strongest first. One 32x32 RGBA8 texture (CSR: per-tile offset, count, z range, then a byte pool, 255 = empty marker). Lists are capped (`MAX_TILE_LIST` 48, real worst case about 32, plus the pool's capacity); the weakest entries drop first, deterministically, and are counted.
+2. Scenery bake (quarter res): the three scenery layers' thickness (unchanged), lit in the composite by the frozen 2.5D terms in `sceneryLight.ts`.
+3. March (`volume.ts`) into a capped half-res RGBA16F target (premultiplied colour, alpha): per pixel, the z interval from the listed chords, then front-to-back Beer-Lambert (Hillaire energy-conserving), per sample a geometric sun march (not jittered, so sheets do not hatch), Wrenninge multiple-scattering octaves with dual-lobe Henyey-Greenstein, powder, silver lining, ambient by height in the cloud, the strike's internal glow. Camera: off-axis perspective, 30 deg FOV, eye at distance 18.66; the z = 0 plane is fixed on screen, so `clientToWorld` and the pointer mapping are unchanged. The eye follows the parallax module's offset (cursor, idle sway, Depth slider, reduced motion) times 12, clamped to +-8.
+4. Composite (full res): sky, far bank, far rain, mid clouds, mid rain, the march through a 3x3 tent upsample, near wisps, near rain, post. The play clouds' alpha (bilinear) shadows the far and mid scenery and keeps the near wisps and near rain off them.
+5. Noise: a 48^3 Perlin-Worley / Worley texture (`cloudNoise.ts`, `simplex-noise` for the Perlin channel) bakes ~0.5 s of CPU in 5 ms timer slices right after the first frame (about a second of wall time, whatever the frame rate), then uploads once and fades in; until then erosion is 0 (smooth ellipsoids). `getState().render.noiseReady` says when.
 
-The sun is the sky's: `skySunPosX/Y` give its direction in the view plane, `skySunDepth` (-1 behind .. 1 in front) the rest. Artist params live in the `volume` group of `src/params/fields.ts` (dev panel).
+Upload per frame: blob texture 254 x 48 B = 12,192 B + tile texture 4,096 B = 16,288 B, at most 16 KiB. `getState().render`: `{ tier, marchPixels, tileBytes, uploadBytes, worstBlobsPerTile, overflowDropped, noiseReady }`.
 
 ## Tiers (`tier.ts`)
 
-Only target scales and step-count uniforms change; no feature toggles, no recompiles. `?tier=hi|mid|low` overrides; otherwise `low` when `(pointer: coarse)` and width <= 860, else `hi`. `getState().tier`, `setTier(tier)`, dev-panel dropdown.
+Only target sizes, step counts and octaves change; nothing recompiles. Default `mid` on desktop, `low` when `(pointer: coarse)` and width <= 860, `?tier=hi|mid|low`, `setTier`. The march target is a scale of the CSS viewport (DPR-independent), capped in pixels.
 
-| Tier | Field/detail | Bake | DPR cap | Play steps | Scenery steps | AO taps |
-| --- | --- | --- | --- | --- | --- | --- |
-| hi | 0.5 | 0.3 | 2 | 8 | 5 | 8 |
-| mid | 0.5 | 0.3 | 1.5 | 6 | 4 | 6 |
-| low | 0.35 | 0.25 | 1 | 4 | 3 | 4 |
+| Tier | Target | Cap | View / sun steps | Octaves | Fine noise, AO | Pixel ratio cap | Scenery steps, AO taps |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| hi | 0.5 | 0.75 MP | 32 / 8 | 8 | yes, yes | 2 | 5, 8 |
+| mid | 0.5 | 0.5 MP | 16 / 5 | 4 | yes, yes | 1.5 | 4, 6 |
+| low | 0.5 | 0.15 MP | 12 / 4 | 2 | no, no | 1 | 3, 4 |
 
 ## Measured cost
 
-Full `scene.render()` with GPU sync, `mixed` scene, clear weather, median ms, dev machine real GPU (WSLg, OpenGL ES backend), DPR 1. "old" is the previous flat shader.
+GPU ms per frame (`__GAME__.bench`, queue drained per batch of 6, median of 5 runs), 1280x800, DPR 1, Sky panel open, real GPU (GTX 1660 Ti through WSLg; WebGPU on the OpenGL ES backend, WebGL2 headed), quiet machine. Rain scenes run at rain 0.7 and 0.9, clear at 0. The old 2.5D renderer cost 1.8 to 2.5 (WebGPU) and 3.1 to 3.4 (WebGL2) in the same harness.
 
-| Size | Backend | old | hi | mid | low |
-| --- | --- | --- | --- | --- | --- |
-| 1280x800 | WebGPU / WebGL2 | 3.5 / 2.5 | 2.9 / 2.3 | 2.8 / 2.6 | 2.5 / 2.8 |
-| 2560x1600 | WebGPU / WebGL2 | 9.1 / 6.8 | 7.0 / 5.6 | 6.5 / 5.2 | 5.1 / 3.9 |
-| 3840x2400 | WebGPU / WebGL2 | 18.9 / 14.6 | 15.1 / 12.9 | 14.6 / 12.1 | 10.9 / 8.5 |
+| Scene | Backend | hi | mid | low |
+| --- | --- | --- | --- | --- |
+| thunder (rain 0.9, two towers) | WebGPU / WebGL2 | 13.4 / 13.2 | 6.6 / 6.2 | 3.8 / 3.5 |
+| rain (rain 0.7) | WebGPU / WebGL2 | 10.3 / 10.0 | 5.4 / 5.1 | 3.0 / 3.1 |
+| mixed (clear) | WebGPU / WebGL2 | 11.8 / 11.3 | 5.9 / 5.6 | 3.3 / 3.1 |
 
-The volume path is cheaper than the old shader at every size: the noise now runs once per field pixel (half res) instead of per screen pixel. Small sizes are overhead-bound, so tiers only separate at high resolution. Spike numbers (A, 3840x2400, WebGPU): baseline 16-17, A hi 11, A low 8; a per-pixel 3D raymarch (B) 25-33 ms, which is why it was not ported. Phones are untested: low is an estimate.
+The composite, scenery bake and rain are about 2 to 3 ms whatever the tier; the march is the rest. Mid is the spike's 20 / 6 / 4 trimmed to 16 / 5 / 4 (the spike's mid was 7.4 ms on thunder here). Phones are untested.
+
+## Not built
+
+A stylized preset (banded light, warm tint, rim) is possible on the same pass (the spike had one) and was dropped. Storm towers and stratus are the weakest: towers read as soft grey lumps without crisp cauliflower edges; sheets are thin, smooth ellipsoids with little streaking.
+
+## Credits
+
+Schneider, Horizon Zero Dawn (SIGGRAPH 2015) and Nubis (2017, 2022): envelope density, erode-only noise, Perlin-Worley. Wrenninge, Kulla, Lundqvist, "Oz: the great and volumetric" (2013): multiple-scattering octaves. Hillaire, Frostbite (2016): energy-conserving integration, dual-lobe phase. three.js `webgpu_volume_cloud` (MIT): the `texture3D` and `Loop`/`Break` pattern. `simplex-noise` (MIT). All formulas reimplemented from the papers; no Shadertoy code.

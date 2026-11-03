@@ -1,5 +1,7 @@
 import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
+import type { BenchResult } from "./render/bench.ts";
+import type { RenderStats } from "./render/scene.ts";
 import type { TierName } from "./render/tier.ts";
 import type { Randomized, SceneId, SceneRef, Settings, SliderKey, SliderState, SliderValues } from "./settings/index.ts";
 import type { UiReport } from "./ui/model.ts";
@@ -8,8 +10,10 @@ import { CLOUD_TYPES, summarizeClouds, type CloudType, type Params, type SceneNa
 export interface GameState {
   ready: boolean;
   backend: "webgpu" | "webgl2" | null;
-  /** Render quality tier: resolution scales and light-march steps only; gameplay is identical on every tier. */
+  /** Render quality tier: march resolution, step counts and octaves only; gameplay is identical on every tier. */
   tier: TierName;
+  /** The cloud pass: `{ tier, marchPixels, tileBytes, uploadBytes, worstBlobsPerTile, overflowDropped, noiseReady }` (see docs/RENDER.md). */
+  render: RenderStats;
   /** Rendered frames. */
   frame: number;
   /** Fixed sim steps run since the last scene load. */
@@ -93,6 +97,8 @@ export interface GameHarnessApi {
   holdFlash(tau: number | null): void;
   /** Switch the render quality tier now (`hi` | `mid` | `low`): resizes the render targets and sets step counts; compiles nothing. */
   setTier(tier: TierName): void;
+  /** Time `frames` full renders with the GPU drained after each batch of 6 (milliseconds per frame). A diagnostic: the loop's own renders pause meanwhile. */
+  bench(frames?: number): Promise<BenchResult>;
   /** The full flat resolved parameter record (numbers), as the game sees it now. */
   resolved(): P;
   /** Dev layer (above weather and user, below the strike flash; any field, interaction included): set overrides, clamped to each field's range. */

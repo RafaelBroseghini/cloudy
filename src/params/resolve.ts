@@ -31,7 +31,7 @@ export type SkyLayer = { [K in SkyKey]?: number }
  * field, never a raw interaction field. The squish slider reaches the sim only through the bounded `squish` multiplier.
  */
 export const USER_KEYS = [
-  'breezeSpeed', 'volLumpStrength', 'volHeightCumulus', 'rainRate', 'strikeRate', 'parallaxStrength', 'squish',
+  'breezeSpeed', 'volErosion', 'volHeightCumulus', 'rainRate', 'strikeRate', 'parallaxStrength', 'squish',
 ] as const satisfies readonly FieldKey[]
 export type UserKey = (typeof USER_KEYS)[number]
 /** Empty unless the player has set a slider (src/settings builds it); an unset slider follows the scene and weather. */

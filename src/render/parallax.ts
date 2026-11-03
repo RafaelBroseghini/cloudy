@@ -1,6 +1,9 @@
-// Parallax camera offset: pure, no three, no DOM. The play layer never reads it (depth factor 1 => zero shift);
-// only render-only scenery layers shift by `offset * (1 - depth)`.
+// Parallax camera offset: pure, no three, no DOM. The play plane (z = 0) never shifts (depth factor 1); render-only scenery
+// layers shift by `offset * (1 - depth)` and the volume pass moves its eye by the same offset (`eyeOf`), so the clouds'
+// near and far sides slide against the plane.
 // Units: fractions of the view height, y-up like the world. The renderer multiplies by VIEW_HEIGHT.
+
+import { EYE_MAX } from "./view.ts";
 
 export interface ParallaxOptions {
   /** Cap on the cursor-driven offset (fraction of view height). */
@@ -92,6 +95,21 @@ export function createParallax(opts: ParallaxOptions = {}): Parallax {
       offset.y = (cy + Math.sin((time / SWAY_PERIOD_Y) * tau) * maxSway * Y_SCALE * swayGain) * strength;
     },
   };
+}
+
+/** World units of eye shift per world unit of the scenery's parallax shift (see `eyeOf`). */
+export const EYE_GAIN = 12;
+
+/**
+ * Eye position (world units, relative to the view centre) of the volume camera for the parallax shift the scenery uses
+ * (`offset * VIEW_HEIGHT`, which already carries the Depth slider, the idle sway and the reduced-motion scale): the same
+ * sign, so a cloud's back moves with the far banks and its front with the near wisps. Zero shift is exactly zero eye.
+ */
+export function eyeOf(shift: { x: number; y: number }, out: { x: number; y: number } = { x: 0, y: 0 }): { x: number; y: number } {
+  const lim = (v: number): number => Math.max(-EYE_MAX, Math.min(EYE_MAX, v * EYE_GAIN)) + 0; // + 0: never -0
+  out.x = lim(shift.x);
+  out.y = lim(shift.y);
+  return out;
 }
 
 /** Screen-space shift of a layer with the given depth factor (1 = play layer, 0 = at infinity, >1 = foreground). */

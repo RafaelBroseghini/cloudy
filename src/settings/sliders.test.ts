@@ -14,7 +14,7 @@ import {
   userLayerOf,
   breezeSpeedOf,
   cumulusHeightOf,
-  lumpStrengthOf,
+  erosionOf,
   parallaxStrengthOf,
   rainRateOf,
   strikeRateOf,
@@ -90,7 +90,7 @@ describe('time of day', () => {
 describe('slider mappings', () => {
   const MAPS: Array<[string, (v: number) => number, FieldKey]> = [
     ['breeze', breezeSpeedOf, 'breezeSpeed'],
-    ['puffiness lumps', lumpStrengthOf, 'volLumpStrength'],
+    ['puffiness erosion', erosionOf, 'volErosion'],
     ['puffiness height', cumulusHeightOf, 'volHeightCumulus'],
     ['rain', rainRateOf, 'rainRate'],
     ['thunder', strikeRateOf, 'strikeRate'],
@@ -115,7 +115,7 @@ describe('slider mappings', () => {
     const d = defaultValues()
     expect(squishOf(0.5)).toBe(1)
     expect(parallaxStrengthOf(0.5)).toBe(d.parallaxStrength)
-    expect(lumpStrengthOf(0.5)).toBeCloseTo(d.volLumpStrength, 12)
+    expect(erosionOf(0.5)).toBeCloseTo(d.volErosion, 12)
     expect(cumulusHeightOf(0.5)).toBeCloseTo(d.volHeightCumulus, 12)
     expect(squishOf(0)).toBe(0.6)
     expect(squishOf(1)).toBe(1.6)
@@ -123,7 +123,7 @@ describe('slider mappings', () => {
 
   it('sliders map only to bounded, non-interaction fields (squish via its multiplier)', () => {
     const u: UserLayer = userLayerOf({ breeze: 1, puffiness: 1, rain: 1, thunder: 1, depth: 1, squish: 1 })
-    expect(Object.keys(u).sort()).toEqual(['breezeSpeed', 'parallaxStrength', 'rainRate', 'squish', 'strikeRate', 'volHeightCumulus', 'volLumpStrength'])
+    expect(Object.keys(u).sort()).toEqual(['breezeSpeed', 'parallaxStrength', 'rainRate', 'squish', 'strikeRate', 'volErosion', 'volHeightCumulus'])
     expect(Object.keys(userLayerOf({}))).toEqual([])
     expect(Object.keys(skyLayerOf({}))).toEqual([])
   })

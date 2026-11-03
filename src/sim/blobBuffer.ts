@@ -1,14 +1,25 @@
 // The one thing that crosses from the sim (CPU) to the renderer (GPU) each frame for the play layer.
-// The sim writes it, the renderer uploads it as a data texture. Nothing flows back.
+// The sim writes it; the renderer makes its own RENDER COPY of it (below), uploads that as a data texture, and never
+// touches this buffer. Nothing flows back.
+//
+// Render copy (src/render/tiles.ts `prepareRenderBlobs`): the same 12-float records, with three slots reused because the
+// volume pass does not read the sim's velocities or its spare slot:
+//   [4] cloud base y   lowest (y - r) among the blobs sharing this cloud id   (the sim's vx)
+//   [5] cloud top y    highest (y + r) of the same cloud                      (the sim's vy)
+//   [11] z offset      stable per-slot depth offset in world units, from an integer hash of the slot (the sim's spare)
+// Everything else (x, y, radius, mass, cloud id, alive, type one-hot) is copied unchanged.
 
 /**
- * Floats per blob: three RGBA texels (two of motion and size, one of type). 12 floats = 48 bytes, so 256 blobs upload
- * 12 KB per frame (PLAN's target is under 16 KB; a 16-float stride would sit exactly on it).
+ * Floats per blob: three RGBA texels (two of motion and size, one of type). 12 floats = 48 bytes, so MAX_BLOBS blobs
+ * upload 12,192 bytes; the 4,096-byte tile texture next to it brings a frame to 16,288 of PLAN's 16 KiB (16,384).
  */
 export const BLOB_STRIDE = 12
 
-/** Upper bound the renderer sizes its texture for. */
-export const MAX_BLOBS = 256
+/**
+ * Upper bound the renderer sizes its texture for. 254, not 255 or 256: the tile lists index blobs with one byte and 255
+ * is their empty marker. Every scene layout is far under it (the largest is 162 blobs).
+ */
+export const MAX_BLOBS = 254
 
 /**
  * A blob of radius r contributes to the density field out to r * INFLUENCE_FACTOR.
@@ -46,7 +57,7 @@ export const BLOB = {
   typeCumulus: 8,
   typeStratus: 9,
   typeNimbus: 10,
-  /** Spare (keeps the third texel whole). */
+  /** Spare in the sim's buffer (keeps the third texel whole); the render copy keeps the blob's z offset here. */
   spare: 11,
 } as const
 

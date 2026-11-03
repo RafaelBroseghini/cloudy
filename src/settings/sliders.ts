@@ -18,14 +18,14 @@ const unlerp = (a: number, b: number, x: number): number => clamp01((x - a) / (b
 
 // Slider position -> field value. Every range sits inside the field's own range (tested).
 const BREEZE_MAX = FIELD_SPECS.breezeSpeed.max
-const PUFF_LUMP = [0.15, 0.95] as const // volLumpStrength: smooth domes .. deep billows (default .55 at .5)
-const PUFF_HEIGHT = [0.6, 1.8] as const // volHeightCumulus, in blob radii (default 1.2 at .5)
+const PUFF_ERODE = [0.25, 1.15] as const // volErosion: smooth, soft lumps .. deeply carved billows (default .7 at .5)
+const PUFF_HEIGHT = [0.5, 1.4] as const // volHeightCumulus, in blob radii: thin .. deep (default .95 at .5)
 const STRIKE_RATE = [0.07, 0.29] as const // strikes per second: about one per 14 s .. one per 3.4 s (thunder weather is .1)
 const DEPTH_MAX = FIELD_SPECS.parallaxStrength.max // 2: default 1 at .5
 const SQUISH = [FIELD_SPECS.squish.min, 1, FIELD_SPECS.squish.max] as const // firm .. 1 at .5 .. marshmallow
 
 export const breezeSpeedOf = (v: number): number => lerp(0, BREEZE_MAX, clamp01(v))
-export const lumpStrengthOf = (v: number): number => lerp(PUFF_LUMP[0], PUFF_LUMP[1], clamp01(v))
+export const erosionOf = (v: number): number => lerp(PUFF_ERODE[0], PUFF_ERODE[1], clamp01(v))
 export const cumulusHeightOf = (v: number): number => lerp(PUFF_HEIGHT[0], PUFF_HEIGHT[1], clamp01(v))
 export const rainRateOf = (v: number): number => clamp01(v)
 export const strikeRateOf = (v: number): number => lerp(STRIKE_RATE[0], STRIKE_RATE[1], clamp01(v))
@@ -49,7 +49,7 @@ export function userLayerOf(sliders: SliderValues): UserLayer {
   const u: UserLayer = {}
   if (sliders.breeze !== undefined) u.breezeSpeed = breezeSpeedOf(sliders.breeze)
   if (sliders.puffiness !== undefined) {
-    u.volLumpStrength = lumpStrengthOf(sliders.puffiness)
+    u.volErosion = erosionOf(sliders.puffiness)
     u.volHeightCumulus = cumulusHeightOf(sliders.puffiness)
   }
   if (sliders.rain !== undefined) u.rainRate = rainRateOf(sliders.rain)
@@ -72,7 +72,7 @@ export function sliderValuesOf(p: P, set: SliderValues = {}): Record<SliderKey, 
   const fromP: Record<SliderKey, number> = {
     timeOfDay: timeOfDayFromSunX(p.skySunPosX),
     breeze: unlerp(0, BREEZE_MAX, p.breezeSpeed),
-    puffiness: unlerp(PUFF_LUMP[0], PUFF_LUMP[1], p.volLumpStrength),
+    puffiness: unlerp(PUFF_ERODE[0], PUFF_ERODE[1], p.volErosion),
     rain: clamp01(p.rainRate),
     thunder: unlerp(STRIKE_RATE[0], STRIKE_RATE[1], p.strikeRate),
     depth: unlerp(0, DEPTH_MAX, p.parallaxStrength),

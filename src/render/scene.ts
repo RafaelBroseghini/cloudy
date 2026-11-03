@@ -1,46 +1,98 @@
-import { RenderPipeline, RenderTarget, HalfFloatType, LinearFilter, Vector2, type WebGPURenderer } from "three/webgpu";
-import { exp, float, Fn, length, mix, screenUV, smoothstep, uniform, vec2, vec3, vec4 } from "three/tsl";
+import {
+  Data3DTexture,
+  HalfFloatType,
+  LinearFilter,
+  RenderPipeline,
+  RenderTarget,
+  RepeatWrapping,
+  RGBAFormat,
+  UnsignedByteType,
+  Vector2,
+  type WebGPURenderer,
+} from "three/webgpu";
+import { exp, float, Fn, length, mix, screenUV, smoothstep, texture, uniform, vec2, vec3, vec4 } from "three/tsl";
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
-import { createCloudLook, createFieldTarget, createSplatPass, meanBlobRadius, sampleFieldDensity } from "./cloudField.ts";
+import { benchFrames, createGpuSync, type BenchResult } from "./bench.ts";
+import { createNoiseBaker, NOISE_SIZE } from "./cloudNoise.ts";
 import { applyLook } from "./look.ts";
+import { eyeOf } from "./parallax.ts";
 import { createRain } from "./rain.ts";
 import { createScenery } from "./scenery.ts";
+import { createSceneryLight, texUV } from "./sceneryLight.ts";
 import { createSky } from "./sky.ts";
-import { initialTier, TIERS, type TierName } from "./tier.ts";
-import { createViewCamera, fitViewCamera, VIEW_HEIGHT } from "./view.ts";
-import { createDetailPass, createHeightSplat, createVolumeLook, lumpFrequency, shadeVolume } from "./volume.ts";
+import { initialTier, marchSize, TIERS, type TierName } from "./tier.ts";
+import { createTileBuilder, meanBlobRadius, prepareRenderBlobs, tileGrid, type TileStats } from "./tiles.ts";
+import { VIEW_HEIGHT } from "./view.ts";
+import { createBlobTexture, createCloudMarch, createCloudUniforms, createTileTexture } from "./volume.ts";
 
-/** Billowing runs at this fraction of its speed under prefers-reduced-motion. */
+/** Noise phase units per second (the clouds slowly billow); under prefers-reduced-motion it runs at REDUCED_EVOLVE of that. */
+const BILLOW_RATE = 0.03;
 const REDUCED_EVOLVE = 0.15;
+/** How fast the blob radius used to size the billows follows the clouds' (per rendered frame): splits never make them pop. */
+const RADIUS_FOLLOW = 0.1;
+/** Blob radius the default billow size is authored for (the desktop layouts' mass-weighted mean). */
+const REF_RADIUS = 0.45;
+/** CPU budget (ms) of one slice of the 3D noise bake, and the pause (ms) between slices: about a second of wall time in all, a few ms at a time. */
+const BAKE_BUDGET_MS = 5;
+const BAKE_PAUSE_MS = 4;
+/** When the main thread was starved since the last slice (a very slow GPU path), a slice takes up to this long, so the bake still finishes in seconds. */
+const BAKE_BUDGET_MAX_MS = 50;
+/** Seconds the erosion takes to fade in once the noise exists. */
+const NOISE_FADE_S = 1;
+/** How far (texels of the march target) the composite's 4 bilinear taps sit from the pixel: 1 = a full 3x3 tent, less = crisper. */
+const UPSAMPLE_BLUR = 1;
 
 export interface SceneOptions {
   /** Quality tier; default from the device and `?tier=` (see tier.ts). */
   tier?: TierName;
 }
 
-/** How fast the blob radius used to size the billows follows the clouds' (per rendered frame): splits never make them pop. */
-const RADIUS_FOLLOW = 0.1;
-
 export interface Cursor {
   x: number;
   y: number;
+}
+
+/** What `getState().render` reports. */
+export interface RenderStats {
+  tier: TierName;
+  /** Pixels of the cloud march target. */
+  marchPixels: number;
+  /** Bytes of the tile texture. */
+  tileBytes: number;
+  /** Bytes uploaded to the GPU per frame for the clouds: the blob texture plus the tile texture. */
+  uploadBytes: number;
+  /** Longest tile list before any cap, and entries cut by the caps (weakest first). */
+  worstBlobsPerTile: number;
+  overflowDropped: number;
+  /** False while the 3D noise is still baking (the clouds are smooth ellipsoids until then). */
+  noiseReady: boolean;
 }
 
 export async function createScene(renderer: WebGPURenderer, opts: SceneOptions = {}) {
   let tierName: TierName = opts.tier ?? initialTier();
   let tier = TIERS[tierName];
 
-  const camera = createViewCamera();
-  const splat = createSplatPass();
-  const target = createFieldTarget();
   const sky = createSky();
-  const look = createCloudLook();
-  const vol = createVolumeLook();
-  const halfFloatTarget = () =>
-    new RenderTarget(2, 2, { type: HalfFloatType, depthBuffer: false, minFilter: LinearFilter, magFilter: LinearFilter });
-  const heightTarget = halfFloatTarget();
-  const detailTarget = halfFloatTarget();
-  const heightSplat = createHeightSplat(splat.geometry, vol);
+  const cloud = createCloudUniforms();
+  const light = createSceneryLight();
+  const blobTex = createBlobTexture();
+  const tileTex = createTileTexture();
+  const blobData = blobTex.image.data as Float32Array;
+  const tileData = tileTex.image.data as Uint8Array;
+  const marchTarget = new RenderTarget(2, 2, { type: HalfFloatType, depthBuffer: false, minFilter: LinearFilter, magFilter: LinearFilter });
+  const marchTex = texture(marchTarget.texture);
+
+  // The erosion noise: allocated (zeros) now so the pipeline can compile against a 3D texture, baked across the first frames.
+  const baker = createNoiseBaker(NOISE_SIZE);
+  const noiseTex = new Data3DTexture(baker.data, NOISE_SIZE, NOISE_SIZE, NOISE_SIZE);
+  noiseTex.format = RGBAFormat;
+  noiseTex.type = UnsignedByteType;
+  noiseTex.minFilter = noiseTex.magFilter = LinearFilter;
+  noiseTex.wrapS = noiseTex.wrapT = noiseTex.wrapR = RepeatWrapping;
+  noiseTex.unpackAlignment = 1;
+  noiseTex.needsUpdate = true;
+  let noiseReady = false;
+  let noiseFade = 0;
 
   const time = uniform(0);
   const aspect = uniform(1);
@@ -53,28 +105,35 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   // Cool white-blue, a touch brighter than the sky so the lift reads as light, not as a grey wash.
   const flashTint = vec3(0.78, 0.88, 1.0);
 
-  const detail = createDetailPass({ fieldTex: target.texture, heightTex: heightTarget.texture, look, vol, aspect });
-  const clouds = shadeVolume({ detailTex: detailTarget.texture, fieldTex: target.texture, look, vol, aspect });
+  const march = createCloudMarch({ u: cloud, blobTex, tileTex, noiseTex, aspect, flash: post.flash, flashX: post.flashX, flashY: post.flashY });
   const scenery = createScenery();
-  const lit = scenery.lit(aspect, vol);
+  const lit = scenery.lit(aspect, light);
   const rain = createRain(scenery.parallax);
   const sceneryCtx = {
     aspect,
-    fieldDensity: sampleFieldDensity(target.texture, aspect),
-    playThreshold: look.threshold,
+    playBody: (p: Parameters<typeof texUV>[0]) => marchTex.sample(texUV(p, aspect)).a,
     horizon: sky.horizon,
     cursorPos,
     cursorActive,
     cursorRadius,
   };
 
+  /** Texel size of the march target, for the composite's upsample. */
+  const marchTexel = uniform(new Vector2(0.001, 0.001));
+  /** The march's premultiplied colour and alpha at this pixel: 4 bilinear taps at the texel corners make a 3x3 tent, which hides the march's dither. */
+  const clouds = Fn(() => {
+    const o = marchTexel.mul(UPSAMPLE_BLUR * 0.5);
+    const tap = (sx: number, sy: number) => marchTex.sample(screenUV.add(vec2(o.x.mul(sx), o.y.mul(sy))));
+    return tap(1, 1).add(tap(-1, 1)).add(tap(1, -1)).add(tap(-1, -1)).mul(0.25);
+  });
+
   const composite = Fn(() => {
     // screenUV follows WebGPU (y down) on both backends; the world is y-up.
     const uvUp = vec2(screenUV.x, screenUV.y.oneMinus());
     const wp = uvUp.sub(0.5).mul(vec2(aspect.mul(VIEW_HEIGHT), VIEW_HEIGHT));
     const skyColor = sky.colorAt(aspect, uvUp);
-    // Back to front: sky, far bank, far rain, mid clouds, mid rain, the play layer (never shifted), near wisps, near rain.
-    // Rain bands behind the play layer are hidden by its clouds; the near band is muted over them to keep them readable.
+    // Back to front: sky, far bank, far rain, mid clouds, mid rain, the play clouds (the volume pass), near wisps, near rain.
+    // Rain bands behind the play clouds are hidden by them; the near band is muted over them to keep them readable.
     const far = lit.far(wp, sceneryCtx);
     const behind = mix(skyColor, far.rgb, far.a);
     const rainFar = rain.far(wp, sky.horizon, float(0));
@@ -84,18 +143,16 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const rainMid = rain.mid(wp, sky.horizon, float(0));
     const behindPlay0 = mix(behindMid, rainMid.rgb, rainMid.a);
     // Lightning: a soft pool of light around the strike x (wide, centred a little above the middle), a gentle lift
-    // everywhere else. Sky and scenery brighten; the play clouds are lit from inside, including their dark undersides.
+    // everywhere else. The sky and scenery brighten here; the play clouds are lit from inside by the volume pass.
     const gx = uvUp.x.sub(post.flashX).mul(aspect);
     const gy = uvUp.y.sub(post.flashY);
     const pool = exp(gx.mul(gx).div(0.2).add(gy.mul(gy).div(0.35)).negate());
     const behindPlay = behindPlay0.mul(post.flash.mul(0.3).add(1)).add(flashTint.mul(post.flash.mul(pool.mul(0.3).add(0.05))));
-    const c = clouds(wp);
-    const cloudRgb = c.rgb.add(flashTint.mul(post.flash.mul(pool.mul(0.5).add(0.1))));
-    const playOver = mix(behindPlay, cloudRgb, c.a);
+    const c = clouds();
+    const playOver = behindPlay.mul(float(1).sub(c.a)).add(c.rgb); // the march is premultiplied
     const near = lit.near(wp, sceneryCtx);
     const withNear = mix(playOver, near.rgb, near.a);
-    const onPlay = smoothstep(0.0, look.threshold.mul(1.4), sceneryCtx.fieldDensity(wp));
-    const rainNear = rain.near(wp, sky.horizon, onPlay);
+    const rainNear = rain.near(wp, sky.horizon, c.a);
     const withRain = mix(withNear, rainNear.rgb, rainNear.a);
     const withClouds = withRain.mul(post.exposure).add(flashTint.mul(post.flash.mul(0.04)));
     // Soft ring: bright band over a wider faint blue halo so it reads on both sky and cloud.
@@ -108,70 +165,117 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
 
   const pipeline = new RenderPipeline(renderer, composite());
 
+  // CPU side of the volume pass: the render copy of the sim's blobs and the tile lists, rebuilt when anything they depend on changes.
+  const tiles = createTileBuilder();
+  const zh = new Float32Array(MAX_BLOBS);
+  const thickness = { cumulus: 0.95, stratus: 0.38, nimbus: 1.7 };
+  const eye = { x: 0, y: 0 };
+  let source: Float32Array = new Float32Array(MAX_BLOBS * BLOB_STRIDE);
+  let sourceCount = 0;
+  let grid = tileGrid(1);
+  let meanRadius = REF_RADIUS;
+  let lumpScale = 2.4;
+  let dirty = true;
+  let tileStats: TileStats = tiles.stats;
+
+  /** Build the render copy and the tile lists from the latest blobs, eye and thickness, and mark both textures for upload. */
+  function refresh(): void {
+    prepareRenderBlobs(source, sourceCount, blobData, zh, thickness);
+    tileStats = tiles.build(blobData, zh, sourceCount, grid, eye, tileData);
+    cloud.zMax.value = tileStats.zMax;
+    blobTex.needsUpdate = true;
+    tileTex.needsUpdate = true;
+    dirty = false;
+  }
+
+  function applyLump(): void {
+    // The billow size follows the clouds' own size, so a phone layout (smaller blobs) gets smaller lumps.
+    const period = lumpScale * Math.min(1.5, Math.max(0.5, meanRadius / REF_RADIUS));
+    cloud.noiseScale.value = 1 / period;
+  }
+
   function applySize(width: number, height: number): void {
     renderer.setSize(width, height);
     aspect.value = width / height;
-    fitViewCamera(camera, width / height);
     const pr = renderer.getPixelRatio();
     rain.setPixelHeight(height * pr);
-    const sized = (t: RenderTarget, scale: number): void =>
-      t.setSize(Math.max(2, Math.round(width * pr * scale)), Math.max(2, Math.round(height * pr * scale)));
-    for (const t of [target, heightTarget, detailTarget]) sized(t, tier.field);
-    sized(scenery.bakeTarget, tier.bake);
+    scenery.bakeTarget.setSize(Math.max(2, Math.round(width * pr * tier.bake)), Math.max(2, Math.round(height * pr * tier.bake)));
+    const m = marchSize(width, height, tier);
+    marchTarget.setSize(m.width, m.height);
+    marchTexel.value.set(1 / m.width, 1 / m.height);
+    grid = tileGrid(width / height);
+    cloud.cols.value = grid.cols;
+    cloud.rows.value = grid.rows;
+    cloud.tileSize.value = grid.size;
+    dirty = true;
   }
-  let meanRadius = 0.42;
-  let lumpScale = 3;
-  function applyLump(): void {
-    vol.lumpFreq.value = lumpFrequency(lumpScale, meanRadius);
-  }
-  /** Tier: resolutions and march step counts only (uniforms and target sizes), so nothing recompiles. */
+  /** Tier: target sizes, step counts and octaves only (uniforms and target sizes), so nothing recompiles. */
   function applyTier(): void {
-    vol.steps.value = tier.steps;
-    vol.aoTaps.value = tier.aoTaps;
-    vol.sceneSteps.value = tier.sceneSteps;
+    cloud.steps.value = tier.steps;
+    cloud.lightSteps.value = tier.lightSteps;
+    cloud.octaves.value = tier.octaves;
+    cloud.fine.value = tier.fine;
+    cloud.aoOn.value = tier.ao;
+    light.sceneSteps.value = tier.sceneSteps;
+    light.aoTaps.value = tier.aoTaps;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio));
   }
   applyTier();
   applySize(window.innerWidth, window.innerHeight);
 
-  // Warm-up: compile the splat pipeline asynchronously, then run one real frame so the composite
-  // pipeline exists before the first visible frame.
-  splat.setBlobs(new Float32Array(MAX_BLOBS * BLOB_STRIDE), 1);
-  await renderer.compileAsync(splat.scene, camera);
-  await renderer.compileAsync(heightSplat.scene, camera);
+  // Warm-up: compile the march pipeline asynchronously against its real target, then run one real frame (below) so the
+  // composite and the scenery bake exist before the first visible frame.
+  renderer.setRenderTarget(marchTarget);
+  await renderer.compileAsync(march.quad, march.quad.camera);
+  renderer.setRenderTarget(null);
+
+  const gpuSync = createGpuSync(renderer);
 
   const api = {
     sky,
-    look,
+    /** Play-cloud (volume pass) uniforms; see volume.ts. */
+    cloud,
+    /** Scenery lighting uniforms; see sceneryLight.ts. */
+    light,
     /** Scenery parameters (uniforms): `layers.far|mid|near`, `layers.count`, `layers.grey`, ... See scenery.ts. */
     layers: scenery.layers,
     /** Rain streak uniforms and look; see rain.ts. Render-only. */
     rain,
     /** Post grade uniforms: `exposure` (1 = neutral), `flash` (0..1), `flashX` / `flashY` (0..1 screen position of the glow). */
     post,
-    /** Current scenery parallax shift in world units (the play layer ignores it). */
+    /** Current scenery parallax shift in world units; the volume's eye shift is derived from it. */
     parallax: scenery.parallax.value,
-    /** Scale of that shift (cursor follow and idle sway; the rain bands share it): 0 = flat, 1 = default. */
+    /** Scale of that shift (cursor follow and idle sway; the rain bands and the volume's eye share it): 0 = flat, 1 = default. */
     setParallaxStrength(s: number): void {
       scenery.setParallaxStrength(s);
     },
     /**
-     * Per rendered frame: pointer in world units (null = absent) and elapsed seconds. Moves only scenery;
-     * the play layer and pointer->world mapping are unaffected.
+     * Per rendered frame: pointer in world units (null = absent) and elapsed seconds. Moves the scenery and the volume's eye;
+     * the z = 0 plane and the pointer->world mapping are unaffected.
      */
     updateScenery(pointer: Cursor | null, dt: number): void {
       scenery.update(pointer, (aspect.value * VIEW_HEIGHT) / 2, dt);
-      look.billow.value += look.billowRate.value * Math.min(Math.max(dt, 0), 0.25) * (scenery.reduced() ? REDUCED_EVOLVE : 1);
+      const d = Math.min(Math.max(dt, 0), 0.25);
+      cloud.billow.value += BILLOW_RATE * d * (scenery.reduced() ? REDUCED_EVOLVE : 1);
+      if (noiseReady && noiseFade < 1) {
+        noiseFade = Math.min(1, noiseFade + d / NOISE_FADE_S);
+        cloud.noiseMix.value = noiseFade;
+      }
       rain.update(dt);
+      eyeOf(scenery.parallax.value, eye);
+      cloud.eye.value.set(eye.x, eye.y);
+      dirty = true;
     },
+    /** The sim's blob buffer, read at the next render (the renderer works on its own copy; the buffer is never written). */
     setBlobs(buf: Float32Array, count: number): void {
-      splat.setBlobs(buf, count);
-      // Billows are sized in blob radii; follow the live mean so a phone layout (smaller blobs) gets smaller lumps.
-      const r = meanBlobRadius(buf, Math.min(count, MAX_BLOBS));
+      source = buf;
+      sourceCount = Math.min(count, MAX_BLOBS);
+      const r = meanBlobRadius(buf, sourceCount);
       if (r > 0) {
         meanRadius += (r - meanRadius) * RADIUS_FOLLOW;
         applyLump();
       }
+      dirty = true;
     },
     setCursor(c: Cursor | null): void {
       if (c) {
@@ -181,15 +285,22 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
         cursorActive.value = 0;
       }
     },
-    /** The sim's air offset (`sim.flowState()`): play-cloud noise rides with it. */
+    /** The sim's air offset (`sim.flowState()`): the clouds' noise rides with it. */
     setAir(x: number, y: number): void {
-      look.air.value.set(x, y);
+      cloud.air.value.set(x, y);
     },
     setTime(t: number): void {
       time.value = t;
     },
-    /** Light-march and billow uniforms (see volume.ts); `lumpScale` is in blob radii. */
-    vol,
+    /** z half-extent per blob radius for cumulus, stratus and cumulonimbus (`volHeight*`): the shader and the tile lists share it. */
+    setThickness(cumulus: number, stratus: number, nimbus: number): void {
+      thickness.cumulus = cumulus;
+      thickness.stratus = stratus;
+      thickness.nimbus = nimbus;
+      cloud.zScale.value.set(cumulus, stratus, nimbus);
+      dirty = true;
+    },
+    /** Billow size in world units (`volLumpScale`). */
     setLumpScale(s: number): void {
       lumpScale = s;
       applyLump();
@@ -206,25 +317,45 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     resize(width: number, height: number): void {
       applySize(width, height);
     },
+    /** What the cloud pass costs and carries, for `getState().render`. */
+    stats(): RenderStats {
+      if (dirty) refresh();
+      return {
+        tier: tierName,
+        marchPixels: marchTarget.width * marchTarget.height,
+        tileBytes: tileData.byteLength,
+        uploadBytes: blobData.byteLength + tileData.byteLength,
+        worstBlobsPerTile: tileStats.worstBlobsPerTile,
+        overflowDropped: tileStats.overflowDropped,
+        noiseReady,
+      };
+    },
     render(): void {
-      renderer.setRenderTarget(target);
-      renderer.render(splat.scene, camera);
-      renderer.setRenderTarget(heightTarget);
-      renderer.render(heightSplat.scene, camera);
-      renderer.setRenderTarget(detailTarget);
-      detail.quad.render(renderer);
+      if (dirty) refresh();
+      renderer.setRenderTarget(marchTarget);
+      march.quad.render(renderer);
       scenery.bake(renderer);
       renderer.setRenderTarget(null);
       pipeline.render();
     },
+    /** Time `frames` renders with the GPU drained after each batch (a diagnostic; reads nothing back). */
+    bench(frames = 60): Promise<BenchResult> {
+      return benchFrames(
+        () => {
+          dirty = true;
+          api.render();
+        },
+        gpuSync,
+        frames,
+      );
+    },
     dispose(): void {
-      splat.dispose();
-      heightSplat.dispose();
-      detail.dispose();
-      heightTarget.dispose();
-      detailTarget.dispose();
+      march.dispose();
+      marchTarget.dispose();
+      blobTex.dispose();
+      tileTex.dispose();
+      noiseTex.dispose();
       scenery.dispose();
-      target.dispose();
       pipeline.dispose();
     },
   };
@@ -232,7 +363,22 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   // Put every look uniform at the field defaults so the first frame matches a resolved "clear" P exactly.
   applyLook(api, {});
   api.render();
-  splat.setBlobs(new Float32Array(MAX_BLOBS * BLOB_STRIDE), 0);
+
+  // Bake the erosion noise after the first frame, in short timer slices (not tied to the frame rate, so a slow device still
+  // finishes in about a second of wall time). Until it is done the erosion weight is 0.
+  let lastSlice = performance.now();
+  const bakeSlice = (): void => {
+    const t = performance.now();
+    const budget = Math.min(BAKE_BUDGET_MAX_MS, Math.max(BAKE_BUDGET_MS, (t - lastSlice) * 0.5));
+    lastSlice = t;
+    if (baker.step(budget)) {
+      noiseReady = true;
+      noiseTex.needsUpdate = true; // one upload of the finished volume
+    } else {
+      setTimeout(bakeSlice, BAKE_PAUSE_MS);
+    }
+  };
+  setTimeout(bakeSlice, BAKE_PAUSE_MS);
   return api;
 }
 

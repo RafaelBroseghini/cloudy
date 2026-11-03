@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { createParallax, layerShift, PARALLAX_DEFAULTS, REDUCED_CURSOR_SCALE } from "./parallax.ts";
+import { createParallax, eyeOf, EYE_GAIN, layerShift, PARALLAX_DEFAULTS, REDUCED_CURSOR_SCALE } from "./parallax.ts";
+import { EYE_MAX, VIEW_HEIGHT } from "./view.ts";
 
 const run = (p: ReturnType<typeof createParallax>, seconds: number, hz: number): void => {
   const n = Math.round(seconds * hz);
@@ -110,5 +111,57 @@ describe("parallax", () => {
     fc.assert(fc.property(fc.double({ min: -1, max: 1, noNaN: true }), (o) => layerShift(o, 1) === 0));
     expect(layerShift(0.5, 0.2)).toBeGreaterThan(0);
     expect(layerShift(0.5, 1.8)).toBeLessThan(0);
+  });
+});
+
+describe("the volume camera's eye", () => {
+  const eyeAfter = (opts: Parameters<typeof createParallax>[0], pointer: { x: number; y: number } | null, seconds = 20) => {
+    const p = createParallax(opts);
+    p.setTarget(pointer);
+    run(p, seconds, 60);
+    return eyeOf({ x: p.offset.x * VIEW_HEIGHT, y: p.offset.y * VIEW_HEIGHT });
+  };
+
+  it("depth strength 0 means exactly zero eye shift, for any pointer, sway and time", () => {
+    fc.assert(
+      fc.property(fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: 0, max: 80, noNaN: true }), (x, y, secs) => {
+        const e = eyeAfter({ strength: 0 }, { x, y }, secs);
+        expect(Object.is(e.x, 0)).toBe(true);
+        expect(Object.is(e.y, 0)).toBe(true);
+      }),
+    );
+    // And easing to 0 lands on exactly zero too.
+    const p = createParallax();
+    p.setTarget({ x: 1, y: 1 });
+    run(p, 5, 60);
+    p.setStrength(0);
+    run(p, 20, 60);
+    expect(eyeOf({ x: p.offset.x * VIEW_HEIGHT, y: p.offset.y * VIEW_HEIGHT })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("follows the scenery's shift (same sign), scales with the depth slider, and never leaves the +-EYE_MAX the tile lists are padded for", () => {
+    const right = eyeAfter({ maxSway: 0 }, { x: 1, y: 0 });
+    expect(right.x).toBeCloseTo(PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT * EYE_GAIN, 2);
+    expect(right.x).toBeGreaterThan(0);
+    expect(eyeAfter({ maxSway: 0 }, { x: -1, y: 0 }).x).toBeCloseTo(-right.x, 6);
+    expect(eyeAfter({ maxSway: 0, strength: 0.5 }, { x: 1, y: 0 }).x).toBeCloseTo(right.x / 2, 6);
+    fc.assert(
+      fc.property(fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: 0, max: 2, noNaN: true }), (x, y, s) => {
+        const e = eyeAfter({ strength: s }, { x, y }, 30);
+        expect(Math.abs(e.x)).toBeLessThanOrEqual(EYE_MAX);
+        expect(Math.abs(e.y)).toBeLessThanOrEqual(EYE_MAX);
+      }),
+      { numRuns: 40 },
+    );
+  });
+
+  it("reduced motion scales the cursor shift down and drops the sway", () => {
+    const full = eyeAfter({ maxSway: 0 }, { x: 1, y: 0 });
+    const reduced = eyeAfter({ maxSway: 0, reducedMotion: true }, { x: 1, y: 0 });
+    expect(reduced.x).toBeCloseTo(full.x * REDUCED_CURSOR_SCALE, 6);
+    const idleFull = eyeAfter({}, null, 37 / 4);
+    const idleReduced = eyeAfter({ reducedMotion: true }, null, 37 / 4);
+    expect(Math.abs(idleFull.x)).toBeGreaterThan(0.5);
+    expect(Math.abs(idleReduced.x)).toBeLessThan(0.05);
   });
 });
