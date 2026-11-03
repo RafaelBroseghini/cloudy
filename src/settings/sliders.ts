@@ -19,7 +19,7 @@ const unlerp = (a: number, b: number, x: number): number => clamp01((x - a) / (b
 // Slider position -> field value. Every range sits inside the field's own range (tested).
 const BREEZE_MAX = FIELD_SPECS.breezeSpeed.max
 const PUFF_ERODE = [0.25, 1.15] as const // volErosion: smooth, soft lumps .. deeply carved billows (default .7 at .5)
-const PUFF_HEIGHT = [0.5, 1.4] as const // volHeightCumulus, in blob radii: thin .. deep (default .95 at .5)
+const PUFF_HEIGHT = [0.6, 1.7] as const // volHeightCumulus, in blob radii: thin .. deep (default 1.15 at .5)
 const STRIKE_RATE = [0.07, 0.29] as const // strikes per second: about one per 14 s .. one per 3.4 s (thunder weather is .1)
 const DEPTH_MAX = FIELD_SPECS.parallaxStrength.max // 2: default 1 at .5
 const SQUISH = [FIELD_SPECS.squish.min, 1, FIELD_SPECS.squish.max] as const // firm .. 1 at .5 .. marshmallow

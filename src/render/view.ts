@@ -5,10 +5,10 @@
 
 export const VIEW_HEIGHT = 10;
 /** Vertical field of view of the volume camera. */
-export const CAMERA_FOV_DEG = 30;
+export const CAMERA_FOV_DEG = 36;
 /** Largest eye shift (world units, each axis) the volume pass supports. */
-export const EYE_MAX = 8;
-/** Distance (world units) from the eye to the play plane: the plane is exactly VIEW_HEIGHT tall at this FOV (about 18.66). */
+export const EYE_MAX = 10;
+/** Distance (world units) from the eye to the play plane: the plane is exactly VIEW_HEIGHT tall at this FOV (about 13.74). */
 export const CAMERA_DISTANCE = VIEW_HEIGHT / 2 / Math.tan((CAMERA_FOV_DEG * Math.PI) / 360);
 
 export function viewWidth(aspect: number): number {

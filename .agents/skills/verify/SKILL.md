@@ -38,7 +38,7 @@ Types, per desktop pass, after thunder: each scene (`m1`, `clear`, `rain`, `thun
 A pass is not a look. Open `artifacts/verify/{webgpu,webgl2}-{initial,split,merge,rain,flash,types-clear,types-rain,types-thunder,types-mixed}.png` and `mobile-{initial,rain}.png` and check by eye:
 
 - Clouds are soft 3D volumes: bright tops, shaded blue-grey undersides, translucent edges, a little grain at most (no hard edges, no diagonal hatching on the thin stratus sheets). Mid is the default tier, so mid shots look a little flatter than `?tier=hi`.
-- Types shots: cumulus is puffy with volume; stratus is a soft, layered, flat sheet; cumulonimbus is a lit tower with a soft slate base. All three must be distinguishable at a glance.
+- Types shots: cumulus is puffy with volume; stratus is a soft, layered, flat sheet; cumulonimbus is a cauliflower tower with a wide sheared anvil, a sunlit top and a flat, darker, slightly ragged base. All three must be distinguishable at a glance.
 - The cursor ring is visible after the split.
 - Nothing is black or blank; the sky fills the whole screenshot and the clouds are inside it, including on the phone.
 - Rain shots: rain streaks are visible; the play clouds are clearly lighter than the sky; the scenery layers show behind them.

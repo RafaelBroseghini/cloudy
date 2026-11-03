@@ -86,6 +86,10 @@ export const FIELD_SPECS = {
   volSunGain: f('volume', 0, 6, 1.5),
   /** Erosion strength: how deeply the baked noise carves billows into the sim's silhouette (0 = smooth ellipsoids). Noise only subtracts, so the contour never grows. */
   volErosion: f('volume', 0, 1.5, 0.7),
+  /** Outward lumpiness: how far the billows may bulge past the contour where the field is already above it (0 = never; towers most). The silhouette still follows the sim's contour (a few percent of area). */
+  volLump: f('volume', 0, 1.2, 0.4),
+  /** Layering of stratus sheets: depth of the horizontal bands inside them (0 = smooth sheets). */
+  volStratusLayers: f('volume', 0, 1, 0.7),
   /** Billow size: the noise period in world units (bigger = fewer, rounder lumps), scaled with the clouds' own size on small screens. */
   volLumpScale: f('volume', 1, 8, 2.4),
   /** How flat the underside of cumulus and cumulonimbus is (0 = round all over, 1 = a thin, flat base). */
@@ -103,9 +107,9 @@ export const FIELD_SPECS = {
   /** Silver lining: light leaking through thin cloud edges when the sun is behind (needs skySunDepth < 0). */
   volSilver: f('volume', 0, 4, 1),
   /** Half-thickness (in blob radii) of each cloud type, and from it how deep a cloud is along the view axis. */
-  volHeightCumulus: f('volume', 0.1, 3, 0.95),
+  volHeightCumulus: f('volume', 0.1, 3, 1.15),
   volHeightStratus: f('volume', 0.1, 3, 0.38),
-  volHeightNimbus: f('volume', 0.1, 3, 1.7),
+  volHeightNimbus: f('volume', 0.1, 3, 1.9),
   // scenery: far bank, mid clouds, near wisps (render-only)
   ...scenery('far', 0.5, 0.3, 0.01, 0.5),
   ...scenery('mid', 0.7, 0.2, 0.02, 0.5),

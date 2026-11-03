@@ -10,10 +10,10 @@ Each is stored as its 0..1 position and mapped by a monotone, clamped function. 
 | --- | --- | --- | --- |
 | `timeOfDay` | sky colours, sun x/y/size/strength/depth, `cloudLit/Mid/Shade` | keyframes 0 dawn, .25 morning, **.5 midday = defaults**, .78 sunset, 1 purple dusk (`timeOfDay.ts`) | Goes in `Layers.sky`, BELOW the weather, so rain's grey still wins; sun x is strictly increasing (the inverse key). Sunset and dusk put the sun behind the clouds (`skySunDepth` -0.1, -0.15) with warm or rosy tints |
 | `breeze` | `breezeSpeed` | 0 .. 1.5 (the field's range) | |
-| `puffiness` | `volErosion`, `volHeightCumulus` | .25 .. 1.15, .5 .. 1.4 (.5 = defaults .7 and .95) | Erosion carves the billows into the silhouette; the height is how deep a cumulus is along the view axis |
+| `puffiness` | `volErosion`, `volHeightCumulus` | .25 .. 1.15, .6 .. 1.7 (.5 = defaults .7 and 1.15) | Erosion carves the billows into the silhouette; the height is how deep a cumulus is along the view axis |
 | `rain` | `rainRate` | 0 .. 1 | unset follows the weather |
 | `thunder` | `strikeRate` | .07 .. .29 /s | only live in thunder weather (`sliderEnabled`); never sets `strikesEnabled` |
-| `depth` | `parallaxStrength` | 0 .. 2 (.5 = today's) | scales the scenery and rain-band parallax and the volume's eye shift: cursor shift and idle sway; 0 is flat (no eye movement) |
+| `depth` | `parallaxStrength` | 0 .. 2 (.5 = today's) | scales the scenery and rain-band parallax and the volume's eye shift: cursor shift and idle sway; 0 is flat (no eye movement). The eye shift saturates smoothly (tanh) toward its largest value, so a high Depth adds mostly near the middle of the screen |
 | `squish` | `squish` | .6 .. 1.6 (.5 = 1) | `resolve` divides `k_s` by it, multiplies `c`, `splitStrain` by its root, divides `yieldStrain` by its root (yield stays under .9 split); applied before the dev layer; gate, cursor and type fields untouched |
 
 The user layer (`USER_KEYS`) can hold only those fields. `strikesEnabled`, raw interaction fields and sky colours are type errors there.

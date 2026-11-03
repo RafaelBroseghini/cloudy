@@ -22,8 +22,8 @@ export const WEATHER_PRESETS: Readonly<Record<WeatherState, Layer>> = {
     lightGain: 3.4,
     // Overcast light: the sun is dim and high behind the clouds, so the clouds are greyer and their shadows softer.
     skySunDepth: 0.2,
-    volSunGain: 1,
-    volAmbient: 0.75,
+    volSunGain: 1.15,
+    volAmbient: 0.7,
     volMultiScatter: 0.55,
     ...col('cloudLit', '#f4f7fb'),
     ...col('cloudMid', '#c0cbdb'),
@@ -62,11 +62,12 @@ export const WEATHER_PRESETS: Readonly<Record<WeatherState, Layer>> = {
     skySunStrength: 0.03,
     skySunSize: 0.35,
     lightGain: 3.6,
-    // Towers: a dim sun, dark slate cloud (the march also darkens cloud bases by their height in the cloud).
+    // Towers: a dim sun, dark slate cloud (the march also darkens cloud bases by their height in the cloud); enough sunlight and
+    // little enough fill that the billows' lit sides and dark creases show.
     skySunDepth: 0.2,
-    volSunGain: 0.8,
-    volAmbient: 0.6,
-    volMultiScatter: 0.6,
+    volSunGain: 1.2,
+    volAmbient: 0.5,
+    volMultiScatter: 0.5,
     ...col('cloudLit', '#e3e8f1'),
     ...col('cloudMid', '#9ba7ba'),
     ...col('cloudShade', '#39435a'),

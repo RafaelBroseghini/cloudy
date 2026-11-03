@@ -307,6 +307,14 @@ async function main(): Promise<void> {
       updateFlash();
       present();
     },
+    debugView(mode) {
+      scene.setDebugView(mode === "alpha" ? 1 : mode === "clouds" ? 2 : 0);
+      present();
+    },
+    debugEye(side) {
+      scene.setDebugEye(side);
+      present();
+    },
     setTier(tier) {
       scene.setTier(tier);
     },

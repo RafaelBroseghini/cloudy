@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { createParallax, eyeOf, EYE_GAIN, layerShift, PARALLAX_DEFAULTS, REDUCED_CURSOR_SCALE } from "./parallax.ts";
+import { createParallax, eyeOf, EYE_GAIN, layerShift, PARALLAX_DEFAULTS, REDUCED_CURSOR_SCALE, REDUCED_EYE_GAIN } from "./parallax.ts";
 import { EYE_MAX, VIEW_HEIGHT } from "./view.ts";
 
 const run = (p: ReturnType<typeof createParallax>, seconds: number, hz: number): void => {
@@ -141,10 +141,11 @@ describe("the volume camera's eye", () => {
 
   it("follows the scenery's shift (same sign), scales with the depth slider, and never leaves the +-EYE_MAX the tile lists are padded for", () => {
     const right = eyeAfter({ maxSway: 0 }, { x: 1, y: 0 });
-    expect(right.x).toBeCloseTo(PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT * EYE_GAIN, 2);
+    const edge = PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT;
+    expect(right.x).toBeCloseTo(EYE_MAX * Math.tanh((edge * EYE_GAIN) / EYE_MAX), 6);
     expect(right.x).toBeGreaterThan(0);
     expect(eyeAfter({ maxSway: 0 }, { x: -1, y: 0 }).x).toBeCloseTo(-right.x, 6);
-    expect(eyeAfter({ maxSway: 0, strength: 0.5 }, { x: 1, y: 0 }).x).toBeCloseTo(right.x / 2, 6);
+    expect(eyeAfter({ maxSway: 0, strength: 0.5 }, { x: 1, y: 0 }).x).toBeCloseTo(EYE_MAX * Math.tanh((0.5 * edge * EYE_GAIN) / EYE_MAX), 6);
     fc.assert(
       fc.property(fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: 0, max: 2, noNaN: true }), (x, y, s) => {
         const e = eyeAfter({ strength: s }, { x, y }, 30);
@@ -155,10 +156,41 @@ describe("the volume camera's eye", () => {
     );
   });
 
+  it("eyeOf is linear with slope EYE_GAIN near the middle, odd, monotone, and flattens below EYE_MAX", () => {
+    expect(eyeOf({ x: 0.001, y: 0 }).x).toBeCloseTo(0.001 * EYE_GAIN, 4);
+    fc.assert(
+      fc.property(fc.double({ min: 0, max: 3, noNaN: true }), fc.double({ min: 0, max: 3, noNaN: true }), (a, b) => {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        expect(eyeOf({ x: -lo, y: 0 }).x).toBeCloseTo(-eyeOf({ x: lo, y: 0 }).x, 9);
+        expect(eyeOf({ x: lo, y: 0 }).x).toBeLessThanOrEqual(eyeOf({ x: hi, y: 0 }).x);
+        expect(eyeOf({ x: hi, y: 0 }).x).toBeLessThanOrEqual(EYE_MAX);
+      }),
+    );
+  });
+
+  it("a cursor half way to the edge already moves the eye well over half of the largest shift (depth reads everywhere)", () => {
+    const half = (PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT) / 2;
+    expect(eyeOf({ x: half, y: 0 }).x).toBeGreaterThan(0.55 * EYE_MAX);
+    // ... and the edge itself stays inside the range the tile lists are padded for.
+    expect(eyeOf({ x: 2 * half, y: 0 }).x).toBeLessThan(EYE_MAX);
+  });
+
+  it("under reduced motion the eye (with REDUCED_EYE_GAIN) is back at about the 1.8 units at the screen edge it moved before the steeper gain", () => {
+    const p = createParallax({ maxSway: 0, reducedMotion: true });
+    p.setTarget({ x: 1, y: 0 });
+    run(p, 20, 60);
+    const e = eyeOf({ x: p.offset.x * VIEW_HEIGHT, y: p.offset.y * VIEW_HEIGHT }, { x: 0, y: 0 }, REDUCED_EYE_GAIN);
+    expect(e.x).toBeGreaterThan(1.5);
+    expect(e.x).toBeLessThan(2.1);
+    // A gain factor of 1 is the plain mapping.
+    expect(eyeOf({ x: 0.3, y: 0.1 }, { x: 0, y: 0 }, 1)).toEqual(eyeOf({ x: 0.3, y: 0.1 }));
+  });
+
   it("reduced motion scales the cursor shift down and drops the sway", () => {
     const full = eyeAfter({ maxSway: 0 }, { x: 1, y: 0 });
     const reduced = eyeAfter({ maxSway: 0, reducedMotion: true }, { x: 1, y: 0 });
-    expect(reduced.x).toBeCloseTo(full.x * REDUCED_CURSOR_SCALE, 6);
+    expect(reduced.x).toBeCloseTo(EYE_MAX * Math.tanh((REDUCED_CURSOR_SCALE * PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT * EYE_GAIN) / EYE_MAX), 6);
+    expect(reduced.x).toBeLessThan(full.x);
     const idleFull = eyeAfter({}, null, 37 / 4);
     const idleReduced = eyeAfter({ reducedMotion: true }, null, 37 / 4);
     expect(Math.abs(idleFull.x)).toBeGreaterThan(0.5);

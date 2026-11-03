@@ -10,12 +10,12 @@ import {
   Vector2,
   type WebGPURenderer,
 } from "three/webgpu";
-import { exp, float, Fn, length, mix, screenUV, smoothstep, texture, uniform, vec2, vec3, vec4 } from "three/tsl";
+import { clamp, exp, float, Fn, length, max, min, mix, screenUV, select, smoothstep, texture, uniform, vec2, vec3, vec4 } from "three/tsl";
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { benchFrames, createGpuSync, type BenchResult } from "./bench.ts";
 import { createNoiseBaker, NOISE_SIZE } from "./cloudNoise.ts";
 import { applyLook } from "./look.ts";
-import { eyeOf } from "./parallax.ts";
+import { eyeOf, PARALLAX_DEFAULTS, REDUCED_EYE_GAIN } from "./parallax.ts";
 import { createRain } from "./rain.ts";
 import { createScenery } from "./scenery.ts";
 import { createSceneryLight, texUV } from "./sceneryLight.ts";
@@ -102,6 +102,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
 
   /** Post grade: `exposure` scales the scene colour; `flash` (0..1) and `flashX` / `flashY` (screen position of the glow, 0..1) are the lightning (M3). */
   const post = { exposure: uniform(1), flash: uniform(0), flashX: uniform(0.5), flashY: uniform(0.55) };
+  /** Diagnostic view (harness `debugView`): 1 draws the play clouds' alpha as grey, 2 the clouds alone over mid grey (silhouette and parallax measurements). */
+  const debugView = uniform(0);
   // Cool white-blue, a touch brighter than the sky so the lift reads as light, not as a grey wash.
   const flashTint = vec3(0.78, 0.88, 1.0);
 
@@ -120,11 +122,24 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
 
   /** Texel size of the march target, for the composite's upsample. */
   const marchTexel = uniform(new Vector2(0.001, 0.001));
-  /** The march's premultiplied colour and alpha at this pixel: 4 bilinear taps at the texel corners make a 3x3 tent, which hides the march's dither. */
+  /** Edge sharpening of the upsample (tier): 0 = the plain tent, 1 = a bilinear tap (crisper), above 1 = also unsharp-masked. */
+  const upsampleSharp = uniform(0);
+  /**
+   * The march's premultiplied colour and alpha at this pixel: 4 bilinear taps at the texel corners make a 3x3 tent, which hides the
+   * march's dither. The sharpening pushes from the tent toward (and past) one plain bilinear tap, clamped to the range of the
+   * four taps, so edges stay crisp without ringing or halos (the filter cannot invent a value its neighbours do not hold).
+   */
   const clouds = Fn(() => {
     const o = marchTexel.mul(UPSAMPLE_BLUR * 0.5);
     const tap = (sx: number, sy: number) => marchTex.sample(screenUV.add(vec2(o.x.mul(sx), o.y.mul(sy))));
-    return tap(1, 1).add(tap(-1, 1)).add(tap(1, -1)).add(tap(-1, -1)).mul(0.25);
+    const t0 = tap(1, 1);
+    const t1 = tap(-1, 1);
+    const t2 = tap(1, -1);
+    const t3 = tap(-1, -1);
+    const tent = t0.add(t1).add(t2).add(t3).mul(0.25);
+    const centre = marchTex.sample(screenUV);
+    const sharp = tent.add(centre.sub(tent).mul(upsampleSharp));
+    return clamp(sharp, min(min(t0, t1), min(t2, t3)), max(max(t0, t1), max(t2, t3)));
   });
 
   const composite = Fn(() => {
@@ -160,7 +175,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     const band = float(1).sub(smoothstep(0, 0.06, d));
     const halo = float(1).sub(smoothstep(0, 0.16, d)).mul(0.22);
     const haloColor = mix(withClouds, vec3(0.28, 0.45, 0.72), halo.mul(cursorActive));
-    return vec4(mix(haloColor, vec3(1), band.mul(0.85).mul(cursorActive)), 1);
+    const shown = mix(haloColor, vec3(1), band.mul(0.85).mul(cursorActive));
+    const alphaView = vec3(c.a);
+    const cloudsView = c.rgb.add(float(0.5).mul(float(1).sub(c.a)));
+    return vec4(select(debugView.lessThan(0.5), shown, select(debugView.lessThan(1.5), alphaView, cloudsView)), 1);
   });
 
   const pipeline = new RenderPipeline(renderer, composite());
@@ -168,8 +186,10 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   // CPU side of the volume pass: the render copy of the sim's blobs and the tile lists, rebuilt when anything they depend on changes.
   const tiles = createTileBuilder();
   const zh = new Float32Array(MAX_BLOBS);
-  const thickness = { cumulus: 0.95, stratus: 0.38, nimbus: 1.7 };
+  const thickness = { cumulus: 1.15, stratus: 0.38, nimbus: 1.9 };
   const eye = { x: 0, y: 0 };
+  /** Measurement hook (`setDebugEye`): null = the live parallax eye; otherwise the eye for a pointer at that side, billows frozen. */
+  let debugEyeSide: number | null = null;
   let source: Float32Array = new Float32Array(MAX_BLOBS * BLOB_STRIDE);
   let sourceCount = 0;
   let grid = tileGrid(1);
@@ -216,6 +236,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     cloud.octaves.value = tier.octaves;
     cloud.fine.value = tier.fine;
     cloud.aoOn.value = tier.ao;
+    upsampleSharp.value = tier.sharp;
+    cloud.jitterAmt.value = tier.jitter;
     light.sceneSteps.value = tier.sceneSteps;
     light.aoTaps.value = tier.aoTaps;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio));
@@ -256,13 +278,13 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     updateScenery(pointer: Cursor | null, dt: number): void {
       scenery.update(pointer, (aspect.value * VIEW_HEIGHT) / 2, dt);
       const d = Math.min(Math.max(dt, 0), 0.25);
-      cloud.billow.value += BILLOW_RATE * d * (scenery.reduced() ? REDUCED_EVOLVE : 1);
+      if (debugEyeSide === null) cloud.billow.value += BILLOW_RATE * d * (scenery.reduced() ? REDUCED_EVOLVE : 1);
       if (noiseReady && noiseFade < 1) {
         noiseFade = Math.min(1, noiseFade + d / NOISE_FADE_S);
         cloud.noiseMix.value = noiseFade;
       }
       rain.update(dt);
-      eyeOf(scenery.parallax.value, eye);
+      eyeOf(debugEyeSide === null ? scenery.parallax.value : { x: debugEyeSide * PARALLAX_DEFAULTS.maxCursor * VIEW_HEIGHT, y: 0 }, eye, scenery.reduced() ? REDUCED_EYE_GAIN : 1);
       cloud.eye.value.set(eye.x, eye.y);
       dirty = true;
     },
@@ -288,6 +310,14 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     /** The sim's air offset (`sim.flowState()`): the clouds' noise rides with it. */
     setAir(x: number, y: number): void {
       cloud.air.value.set(x, y);
+    },
+    /** Diagnostic: 1 shows the play clouds' alpha as grey, 2 the clouds alone over grey; 0 is the normal view. */
+    setDebugView(mode: 0 | 1 | 2): void {
+      debugView.value = mode;
+    },
+    /** Diagnostic: put the eye where a settled pointer at `side` (-1 left edge .. 0 middle .. 1 right edge) would (default Depth, no sway) and freeze the billows; null releases. */
+    setDebugEye(side: number | null): void {
+      debugEyeSide = side;
     },
     setTime(t: number): void {
       time.value = t;

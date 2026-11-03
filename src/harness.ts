@@ -95,6 +95,10 @@ export interface GameHarnessApi {
   flash(): number;
   /** Freeze the latest strike's flash at `tau` seconds from its peak (negative = during the rise); null releases. For screenshots. */
   holdFlash(tau: number | null): void;
+  /** Diagnostic: `"alpha"` draws the play clouds' alpha as grey, `"clouds"` the clouds alone over mid grey (silhouette and parallax measurements); `null` is the normal view. */
+  debugView(mode: "alpha" | "clouds" | null): void;
+  /** Diagnostic: put the cloud eye where a settled pointer at `side` (-1 left edge .. 0 middle .. 1 right edge) would (default Depth, no sway) and freeze the billow phase, so two shots differ only by the eye; null releases. */
+  debugEye(side: number | null): void;
   /** Switch the render quality tier now (`hi` | `mid` | `low`): resizes the render targets and sets step counts; compiles nothing. */
   setTier(tier: TierName): void;
   /** Time `frames` full renders with the GPU drained after each batch of 6 (milliseconds per frame). A diagnostic: the loop's own renders pause meanwhile. */

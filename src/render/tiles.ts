@@ -17,11 +17,11 @@ export const EMPTY = 255;
 export const TILE_TEX_W = 32;
 export const TILE_TEX_H = 32;
 export const TILE_TEX_BYTES = TILE_TEX_W * TILE_TEX_H * 4;
-/** Headers may use at most this many of the 1024 texels; the rest is the index pool. */
-export const MAX_TILES = 340;
+/** Headers may use at most this many of the 1024 texels; the rest is the index pool. Fewer, bigger tiles (about 0.8 units) keep the pool's roughly 2,800 entries enough for the deeper clouds and the wider eye shift. */
+export const MAX_TILES = 260;
 /**
  * Hard cap on one tile's list. A pile-up of many blobs would otherwise make one tile loop over all of them for every step
- * of every pixel (a GPU hang). Real scenes peak near 30 entries (the pad below included); the weakest entries drop first.
+ * of every pixel (a GPU hang). Real scenes peak near 41 entries (the pad below included, at the widest eye); the weakest entries drop first.
  */
 export const MAX_TILE_LIST = 48;
 /** Lists reach this far (world units) past a blob's cut-off radius, so the z-interval pass finds blobs for slanted rays. */
@@ -29,7 +29,7 @@ export const LIST_PAD = 0.25;
 /** The shader's kernel is cut (and renormalised) at q = QCUT of the blob's reach, so lists need not reach q = 1. */
 export const QCUT = 0.9;
 /** Stable per-slot z offset, in units of the blob's own z half-extent. */
-export const ZOFF_AMP = 0.35;
+export const ZOFF_AMP = 0.45;
 
 export interface ZScale {
   cumulus: number;
@@ -132,6 +132,30 @@ export function tileGrid(aspect: number): TileGrid {
 export function listReach(x: number, y: number, radius: number, zOffset: number, eye: { x: number; y: number }): number {
   const k = Math.abs(zOffset) / CAMERA_DISTANCE;
   return (radius * INFLUENCE_FACTOR * QCUT + Math.hypot(eye.x - x, eye.y - y) * k) / (1 - k) + LIST_PAD;
+}
+
+/**
+ * The z interval where a pixel's slanted eye ray lies inside one blob's cut-off kernel
+ * (|xy - b|^2 / R^2 + (z - bz)^2 / H^2 < QCUT^2), or null when it misses. The ray's xy at depth z is p + e z with
+ * e = (eye - p) / CAMERA_DISTANCE, so the interval is the roots of a quadratic in t = z - bz. This is the z-interval pass of
+ * volume.ts written out in plain numbers (the shader mirrors it line by line); exact for any eye, unlike a vertical chord.
+ */
+export function rayKernelChord(
+  p: { x: number; y: number },
+  eye: { x: number; y: number },
+  blob: { x: number; y: number; z: number; R: number; H: number },
+): { lo: number; hi: number } | null {
+  const ex = (eye.x - p.x) / CAMERA_DISTANCE;
+  const ey = (eye.y - p.y) / CAMERA_DISTANCE;
+  const dx = p.x + ex * blob.z - blob.x;
+  const dy = p.y + ey * blob.z - blob.y;
+  const iR2 = 1 / (blob.R * blob.R);
+  const A = (ex * ex + ey * ey) * iR2 + 1 / (blob.H * blob.H);
+  const B = (dx * ex + dy * ey) * iR2;
+  const disc = B * B - A * ((dx * dx + dy * dy) * iR2 - QCUT * QCUT);
+  if (!(disc > 0)) return null;
+  const sq = Math.sqrt(disc);
+  return { lo: blob.z + (-B - sq) / A, hi: blob.z + (-B + sq) / A };
 }
 
 export interface TileStats {

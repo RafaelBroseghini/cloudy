@@ -97,16 +97,27 @@ export function createParallax(opts: ParallaxOptions = {}): Parallax {
   };
 }
 
-/** World units of eye shift per world unit of the scenery's parallax shift (see `eyeOf`). */
-export const EYE_GAIN = 12;
+/**
+ * Extra factor on the eye's gain under reduced motion (on top of REDUCED_CURSOR_SCALE already in the shift). The eye's gain is
+ * steeper than it was, so a quarter of the shift would still move it twice as far as before; halving the gain puts the reduced
+ * eye back where it was (about 1.8 units at the screen edge). The scenery layers are unaffected.
+ */
+export const REDUCED_EYE_GAIN = 0.5;
+
+/**
+ * World units of eye shift per world unit of the scenery's parallax shift, for small shifts (see `eyeOf`). Large: a cursor
+ * near the middle of the screen already moves the eye several units, so the clouds' sides and thickness show everywhere.
+ */
+export const EYE_GAIN = 24;
 
 /**
  * Eye position (world units, relative to the view centre) of the volume camera for the parallax shift the scenery uses
  * (`offset * VIEW_HEIGHT`, which already carries the Depth slider, the idle sway and the reduced-motion scale): the same
  * sign, so a cloud's back moves with the far banks and its front with the near wisps. Zero shift is exactly zero eye.
  */
-export function eyeOf(shift: { x: number; y: number }, out: { x: number; y: number } = { x: 0, y: 0 }): { x: number; y: number } {
-  const lim = (v: number): number => Math.max(-EYE_MAX, Math.min(EYE_MAX, v * EYE_GAIN)) + 0; // + 0: never -0
+export function eyeOf(shift: { x: number; y: number }, out: { x: number; y: number } = { x: 0, y: 0 }, gain = 1): { x: number; y: number } {
+  // tanh: linear (gain EYE_GAIN) near the centre, then it flattens toward +-EYE_MAX, which the tile lists are padded for.
+  const lim = (v: number): number => EYE_MAX * Math.tanh((v * EYE_GAIN * gain) / EYE_MAX) + 0; // + 0: never -0
   out.x = lim(shift.x);
   out.y = lim(shift.y);
   return out;

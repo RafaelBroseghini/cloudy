@@ -17,6 +17,10 @@ export interface Tier {
   fine: 0 | 1;
   /** 1 = an ambient-occlusion tap per sample (darker under overhangs; about a fifth of the march's cost). */
   ao: 0 | 1;
+  /** Sharpening of the march's upsample in the composite (0 = the plain 3x3 tent; see scene.ts). */
+  sharp: number;
+  /** Fraction of a step the view march's start jitter spans (see volume.ts): the low tier's few steps would show the dither. */
+  jitter: number;
   /** Scenery thickness bake, relative to the drawing buffer. */
   bake: number;
   /** Cap of the device pixel ratio the drawing buffer uses. */
@@ -33,9 +37,9 @@ export interface Tier {
 export const MARCH_MAX_PIXELS = { hi: 750_000, mid: 500_000, low: 150_000 } as const;
 
 export const TIERS: Readonly<Record<TierName, Tier>> = {
-  hi: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.hi, steps: 32, lightSteps: 8, octaves: 8, fine: 1, ao: 1, bake: 0.3, pixelRatio: 2, sceneSteps: 5, aoTaps: 8 },
-  mid: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.mid, steps: 16, lightSteps: 5, octaves: 4, fine: 1, ao: 1, bake: 0.3, pixelRatio: 1.5, sceneSteps: 4, aoTaps: 6 },
-  low: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.low, steps: 12, lightSteps: 4, octaves: 2, fine: 0, ao: 0, bake: 0.25, pixelRatio: 1, sceneSteps: 3, aoTaps: 4 },
+  hi: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.hi, steps: 28, lightSteps: 6, octaves: 8, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 2, sceneSteps: 5, aoTaps: 8 },
+  mid: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.mid, steps: 16, lightSteps: 4, octaves: 4, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 1.5, sceneSteps: 4, aoTaps: 6 },
+  low: { marchScale: 0.6, marchMaxPixels: MARCH_MAX_PIXELS.low, steps: 12, lightSteps: 4, octaves: 2, fine: 1, ao: 0, sharp: 1.5, jitter: 0, bake: 0.25, pixelRatio: 1.5, sceneSteps: 3, aoTaps: 4 },
 };
 
 /**

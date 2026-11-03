@@ -16,6 +16,7 @@ import {
   listReach,
   meanBlobRadius,
   prepareRenderBlobs,
+  rayKernelChord,
   readTile,
   tileGrid,
   zOffsetOf,
@@ -24,7 +25,7 @@ import {
 import { CAMERA_DISTANCE, EYE_MAX, VIEW_HEIGHT } from "./view.ts";
 import { createBlobTexture, createTileTexture } from "./volume.ts";
 
-const Z: ZScale = { cumulus: 0.95, stratus: 0.38, nimbus: 1.7 };
+const Z: ZScale = { cumulus: 1.15, stratus: 0.38, nimbus: 1.9 };
 const NO_EYE = { x: 0, y: 0 };
 
 interface TestBlob {
@@ -173,6 +174,71 @@ describe("render copy of the blob buffer", () => {
   it("mass-weighted mean radius ignores dead slots", () => {
     expect(meanBlobRadius(simBuffer(blobs), 4)).toBeGreaterThan(0.3);
     expect(meanBlobRadius(createBlobBuffer(), 0)).toBe(0);
+  });
+});
+
+describe("the z-interval chord of an eye ray through a blob's kernel", () => {
+  const blobArb2 = fc.record({
+    x: fc.double({ min: -3, max: 3, noNaN: true }),
+    y: fc.double({ min: -3, max: 3, noNaN: true }),
+    z: fc.double({ min: -1, max: 1, noNaN: true }),
+    R: fc.double({ min: 0.3, max: 1.8, noNaN: true }),
+    H: fc.double({ min: 0.2, max: 3, noNaN: true }),
+  });
+  const pxArb = fc.record({ x: fc.double({ min: -5, max: 5, noNaN: true }), y: fc.double({ min: -4, max: 4, noNaN: true }) });
+  /** Is the sample the ray has at depth z inside the kernel's support? */
+  const inside = (p: { x: number; y: number }, eye: { x: number; y: number }, b: { x: number; y: number; z: number; R: number; H: number }, z: number): boolean => {
+    const sx = p.x + ((eye.x - p.x) * z) / CAMERA_DISTANCE;
+    const sy = p.y + ((eye.y - p.y) * z) / CAMERA_DISTANCE;
+    return ((sx - b.x) / b.R) ** 2 + ((sy - b.y) / b.R) ** 2 + ((z - b.z) / b.H) ** 2 < QCUT * QCUT;
+  };
+
+  it("its ends lie on the kernel's cut-off and every depth between them is inside it, for any eye", () => {
+    fc.assert(
+      fc.property(blobArb2, pxArb, eyeArb, (b, p, eye) => {
+        const c = rayKernelChord(p, eye, b);
+        if (!c) return;
+        expect(c.hi).toBeGreaterThan(c.lo);
+        for (const z of [c.lo, c.hi]) {
+          const sx = p.x + ((eye.x - p.x) * z) / CAMERA_DISTANCE;
+          const sy = p.y + ((eye.y - p.y) * z) / CAMERA_DISTANCE;
+          expect(((sx - b.x) / b.R) ** 2 + ((sy - b.y) / b.R) ** 2 + ((z - b.z) / b.H) ** 2).toBeCloseTo(QCUT * QCUT, 6);
+        }
+        for (const f of [0.02, 0.25, 0.5, 0.75, 0.98]) expect(inside(p, eye, b, c.lo + (c.hi - c.lo) * f)).toBe(true);
+        expect(inside(p, eye, b, c.lo - 1e-3)).toBe(false);
+        expect(inside(p, eye, b, c.hi + 1e-3)).toBe(false);
+      }),
+      // Seeded: a ray that grazes the kernel (a root pair closer than the 1e-6 closeness test resolves) can legitimately trip it.
+      { numRuns: 200, seed: 20261102 },
+    );
+  });
+
+  it("a ray that is never inside the kernel misses: no chord", () => {
+    fc.assert(
+      fc.property(blobArb2, pxArb, eyeArb, (b, p, eye) => {
+        if (rayKernelChord(p, eye, b)) return;
+        for (let z = -4; z <= 4; z += 0.05) expect(inside(p, eye, b, z)).toBe(false);
+      }),
+      { numRuns: 100, seed: 20261103 },
+    );
+  });
+
+  it("with the eye straight on it is the vertical chord R-free half-extent H * sqrt(QCUT^2 - q^2) around the blob's depth", () => {
+    const b = { x: 0.3, y: -0.2, z: 0.1, R: 1, H: 1.5 };
+    const p = { x: 0.6, y: 0.1 };
+    const c = rayKernelChord(p, p, b); // eye straight above the pixel: e = 0
+    const q2 = ((p.x - b.x) / b.R) ** 2 + ((p.y - b.y) / b.R) ** 2;
+    const half = b.H * Math.sqrt(QCUT * QCUT - q2);
+    expect(c?.lo).toBeCloseTo(b.z - half, 9);
+    expect(c?.hi).toBeCloseTo(b.z + half, 9);
+  });
+
+  it("a slanted ray's chord is shifted and shortened compared with the vertical one", () => {
+    const b = { x: 0, y: 0, z: 0, R: 1, H: 1 };
+    const p = { x: 0, y: 0 };
+    const straight = rayKernelChord(p, p, b) as { lo: number; hi: number };
+    const slanted = rayKernelChord(p, { x: EYE_MAX, y: 0 }, b) as { lo: number; hi: number };
+    expect(slanted.hi - slanted.lo).toBeLessThan(straight.hi - straight.lo);
   });
 });
 
@@ -361,7 +427,7 @@ describe("tile lists", () => {
         }
       }
     }
-    // MAX_TILE_LIST has headroom over the real worst case (about 30).
-    expect(worst).toBeLessThanOrEqual(MAX_TILE_LIST * 0.8);
+    // MAX_TILE_LIST has headroom over the real worst case (about 41, at the widest eye and the smallest tiles).
+    expect(worst).toBeLessThanOrEqual(MAX_TILE_LIST * 0.9);
   });
 });

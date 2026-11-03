@@ -17,7 +17,7 @@ const LIGHT_KEYS = [
   "cloudMidB", "cloudShadeR", "cloudShadeG", "cloudShadeB",
 ] as const;
 const VOLUME_KEYS = [
-  "volSigma", "volReach", "volSunGain", "volErosion", "volLumpScale", "volFlatBase", "volPowder", "volPhaseG", "volMultiScatter",
+  "volSigma", "volReach", "volSunGain", "volErosion", "volLump", "volStratusLayers", "volLumpScale", "volFlatBase", "volPowder", "volPhaseG", "volMultiScatter",
   "volAmbient", "volAO", "volSilver", "volHeightCumulus", "volHeightStratus", "volHeightNimbus",
 ] as const;
 const SCENERY_KEYS = [
@@ -37,7 +37,13 @@ export type LookValues = Partial<Pick<Values, LookKey>>;
 const EROSION_FINE_RATIO = 0.5;
 
 /** How much more sky-light fill the clouds get when the sun is behind them (full at the dusk keyframe's sun depth, none from midday). */
-const TWILIGHT_FILL = 0.45;
+const TWILIGHT_FILL = 0.3;
+/** More sunlight at twilight: contrast between the lit rim and the tinted shadows. */
+const TWILIGHT_SUN = 0.35;
+/** How far the shade and mid colours move toward the sky's colours at full twilight. */
+const SHADOW_TINT = 0.5;
+const MID_TINT = 0.25;
+const luma = (c: { r: number; g: number; b: number }): number => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 const DEFAULTS = defaultValues();
 
@@ -101,16 +107,25 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
   // The play clouds' volume: artist fields onto the march's uniforms (tier step counts are set by the scene).
   cloud.sigma.value = g("volSigma");
   cloud.reach.value = g("volReach");
-  cloud.sunGain.value = g("volSunGain");
   cloud.erosion.value = g("volErosion");
   cloud.erosionFine.value = g("volErosion") * EROSION_FINE_RATIO;
+  cloud.lump.value = g("volLump");
+  cloud.layers.value = g("volStratusLayers");
   cloud.flatBase.value = g("volFlatBase");
   cloud.powder.value = g("volPowder");
   cloud.phaseG.value = g("volPhaseG");
   cloud.msGain.value = g("volMultiScatter");
   // Low or backlit sun (sunset, dusk): the clouds' faces are lit only by sky light, which is bright then, so the fill rises.
   const backlit = 1 - clamp01((sz / sl - -0.15) / 0.5);
-  cloud.ambient.value = g("volAmbient") * (1 + TWILIGHT_FILL * backlit * backlit * (3 - 2 * backlit));
+  const twilight = backlit * backlit * (3 - 2 * backlit);
+  cloud.twilight.value = twilight;
+  cloud.sunGain.value = g("volSunGain") * (1 + TWILIGHT_SUN * twilight);
+  cloud.ambient.value = g("volAmbient") * (1 + TWILIGHT_FILL * twilight);
+  // Coloured shadows at twilight: the shaded side is lit by the sky, so it leans toward the sky's own (cool, purple) colour at the same brightness.
+  const tint = scratch.setRGB(g("skyTopR"), g("skyTopG"), g("skyTopB"));
+  tint.multiplyScalar(luma(cloud.shadeColor.value) / Math.max(luma(tint), 1e-3));
+  cloud.shadeColor.value.lerp(tint, SHADOW_TINT * twilight);
+  cloud.midColor.value.lerp(scratch.setRGB(g("skyHorizonR"), g("skyHorizonG"), g("skyHorizonB")), MID_TINT * twilight);
   cloud.aoK.value = g("volAO");
   cloud.silver.value = g("volSilver");
   scene.setThickness(g("volHeightCumulus"), g("volHeightStratus"), g("volHeightNimbus"));

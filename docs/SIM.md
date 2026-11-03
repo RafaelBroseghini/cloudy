@@ -41,15 +41,15 @@ Every blob has one type for life: cumulus (the original, baseline), stratus or c
 | `mass` | blob mass | 0.7 | 1.8 |
 | `breeze` | air and wind response | 1.1 | 0.55 |
 
-Measured on the real scene clouds (units/s along a sweep): cumulus starts splitting at about 20, cumulonimbus at about 45 to 70 (thunder weather included), a stratus sheet tears from about 6 to 8 into 2 to 4 pieces. Stratus tearing is mostly its geometry: small blobs (short rest length) lower the absolute flick speed, and neighbour springs only (longer springs make a sheet very hard to tear).
+Measured on the real scene clouds (units/s along a sweep): cumulus starts splitting at about 20, cumulonimbus at about 45 to 70 for a plain ellipse of the same blobs (thunder weather included) but about 60 to 100 through the middle of the shipped storm tower (the broader, bumpier column holds together better than the old one, which split at 40 to 60; through its neck below the dome, 40 to 60), a stratus sheet tears from about 6 to 8 into 2 to 4 pieces. Stratus tearing is mostly its geometry: small blobs (short rest length) lower the absolute flick speed, and neighbour springs only (longer springs make a sheet very hard to tear).
 
-Scene shapes (`buildLayout`): stratus is a thin lens-shaped sheet (aspect up to 6) built column by column (`sheetPoints`, so it thins evenly to its tips instead of coming out a rolling pin), undulating a little along its length; cumulonimbus is a `tower` profile over its height (a broad flat base, a column with cauliflower lumps, a wider flatter anvil sheared downwind; taller than wide, about 1.6:1, so it takes more blobs than the other types: 40 to 66). Compositions per weather (`sceneSpec`: `clear`, `rain`, `thunder`, `mixed`) are slot lists fitted to the view like m1; counts shrink with width, and a portrait view stacks them vertically.
+Scene shapes (`buildLayout`): stratus is a thin lens-shaped sheet (aspect up to 6) built column by column (`sheetPoints`, so it thins evenly to its tips instead of coming out a rolling pin), undulating a little along its length; cumulonimbus is a `tower`, a union of ellipse lobes (`towerLobes`: a broad flat foot, a column of seven puffs that swell with height and bulge to alternating sides, a dome of five big billows, and a wide thin anvil sheared downwind with a billowy upper rim). `towerPoints` fills the union with a jittered hex lattice, scales the lobes until it holds the requested blob count (so fewer blobs narrow the tower evenly), and keeps the deepest points. Points near the rim are pushed out to hug their lobe's outline and made smaller (down to 0.6 of the core radius, `RIM_SHRINK`), so the sim's own contour shows lumps about half a unit across; the lowest 4 to 14 percent of the height keeps full-size blobs, so the base stays flat. About 1.25:1 taller than wide, so it takes more blobs than the other types: 50 to 80. Stratus ends taper the same way (`TIP_SHRINK` 0.28). Compositions per weather (`sceneSpec`: `clear`, `rain`, `thunder`, `mixed`) are slot lists fitted to the view like m1; counts shrink with width, and a portrait view stacks them vertically.
 
 | Scene | Clouds (wide view) |
 | --- | --- |
 | `clear` | 3 cumulus (m1's triangle) + 1 thin stratus low left |
 | `rain` | 3 stratus sheets + 2 cumulus |
-| `thunder` | 2 cumulonimbus + 2 small stratus |
+| `thunder` | 2 cumulonimbus (80 and 66 blobs on a wide view) + 2 small stratus; 167 blobs, the largest scene (MAX_BLOBS is 254) |
 | `mixed` (tornado) | 2 cumulus + 1 cumulonimbus + 2 stratus |
 | `lone` | one big cumulus (the lone-cloud scene) |
 
