@@ -62,7 +62,7 @@ describe("frame stats", () => {
     expect(s.report().worst).toBe(16);
   });
 
-  it("tells the display's rate from the render rate (a 90 Hz screen rendering every other callback)", () => {
+  it("tells the display's rate from the render rate (a screen whose callbacks render every other time)", () => {
     const s = createFrameStats();
     const d = 1000 / 90;
     for (let i = 0; i < 400; i++) {
