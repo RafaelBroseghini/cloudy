@@ -12,6 +12,7 @@ import { SCENES, type SceneId, type Settings, type SliderKey, type SliderState, 
 import { dieSvg, icon } from './icons.ts'
 import { loadMotion as defaultLoadMotion, pressIn, pressOut, relax, squash, stretch, tumble, type MotionApi } from './motion.ts'
 import { SLIDER_UI, WEATHER_UI, panelView, reportOf, type PanelView, type UiReport } from './model.ts'
+import { DRAG_SLOP, dragExtent, releaseOpen } from './sheetDrag.ts'
 import { sceneThumbBackground } from './thumb.ts'
 import { initialOpen, saveOpen } from './uiState.ts'
 
@@ -102,6 +103,9 @@ export function createSkyPanel(host: SkyPanelHost, opts: SkyPanelOptions = {}): 
   fold.setAttribute('aria-controls', 'sky-body')
   const header = el('header', 'sky-head')
   header.append(mark, ttl, dice, fold)
+  // The grab bar says "this drags"; the whole header is the drag zone (see "drag to fold").
+  const grip = el('div', 'sky-grip')
+  grip.setAttribute('aria-hidden', 'true')
 
   // ----- body -----
   const body = el('div', 'sky-body')
@@ -293,6 +297,124 @@ export function createSkyPanel(host: SkyPanelHost, opts: SkyPanelOptions = {}): 
   fold.addEventListener('click', () => setOpen(!open))
   paintOpen()
 
+  // ----- drag to fold -----
+  // A press on the header (or the grab bar) that moves past DRAG_SLOP drags the panel: its height follows the pointer, the
+  // body clipped at the bottom edge, and on release it snaps fully open or shut (sheetDrag.ts). The fold button stays the
+  // keyboard and screen-reader way; a drag that starts on a header button swallows that button's click.
+  interface Drag {
+    readonly id: number
+    readonly y0: number
+    readonly startOpen: boolean
+    active: boolean
+    head: number
+    full: number
+    dy: number
+    vy: number
+    lastY: number
+    lastT: number
+  }
+  let drag: Drag | null = null
+  let swallowClick = false
+  let settle: ReturnType<typeof setTimeout> | undefined
+  const clearDragStyles = (): void => {
+    delete root.dataset.drag
+    root.style.height = ''
+    root.style.overflow = ''
+    body.style.height = ''
+    body.style.flex = ''
+  }
+  const beginDrag = (d: Drag): void => {
+    clearTimeout(settle)
+    clearDragStyles()
+    root.dataset.open = 'true'
+    body.hidden = false
+    const bodyH = body.getBoundingClientRect().height
+    d.head = root.getBoundingClientRect().height - bodyH
+    d.full = bodyH
+    // The body keeps its open size and the panel clips it, so the content slides with the header instead of squashing.
+    body.style.height = `${bodyH}px`
+    body.style.flex = 'none'
+    root.style.overflow = 'hidden'
+    root.dataset.drag = 'move'
+  }
+  const moveTo = (d: Drag): void => {
+    root.style.height = `${d.head + dragExtent(d.startOpen, d.full, d.dy)}px`
+  }
+  const endDrag = (d: Drag): void => {
+    const next = releaseOpen(d.startOpen, d.full, d.dy, d.vy)
+    const onEnd = (e: TransitionEvent): void => {
+      if (e.target === root && e.propertyName === 'height') finish()
+    }
+    const finish = (): void => {
+      clearTimeout(settle)
+      root.removeEventListener('transitionend', onEnd)
+      clearDragStyles()
+      setOpen(next)
+    }
+    if (reduced()) return finish()
+    root.dataset.drag = 'snap'
+    root.style.height = `${d.head + (next ? d.full : 0)}px`
+    root.addEventListener('transitionend', onEnd)
+    // Fallback in case no transition runs (already at the target height).
+    settle = setTimeout(finish, 400)
+  }
+  const dragZone = (t: EventTarget | null): boolean => t instanceof Node && (header.contains(t) || grip.contains(t))
+  // Move and release are heard on the window: the folded pill is short, so the pointer leaves it before the drag starts.
+  // (Capturing on pointerdown instead would retarget the release and break plain clicks on the header's buttons.)
+  root.addEventListener('pointerdown', (e) => {
+    if (drag || !e.isPrimary || e.button !== 0 || !dragZone(e.target)) return
+    drag = { id: e.pointerId, y0: e.clientY, startOpen: open, active: false, head: 0, full: 0, dy: 0, vy: 0, lastY: e.clientY, lastT: e.timeStamp }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', release)
+    window.addEventListener('pointercancel', release)
+  })
+  function onMove(e: PointerEvent): void {
+    const d = drag
+    if (!d || e.pointerId !== d.id) return
+    d.dy = e.clientY - d.y0
+    if (!d.active) {
+      if (Math.abs(d.dy) < DRAG_SLOP) return
+      d.active = true
+      // Stops the browser treating the drag as a text selection or a gesture; not essential, so a refusal is fine.
+      try {
+        root.setPointerCapture(e.pointerId)
+      } catch {
+        // An unknown pointer id (synthetic events): the window listeners still follow it.
+      }
+      beginDrag(d)
+    }
+    const dt = e.timeStamp - d.lastT
+    // Smoothed velocity, so the last jittery sample does not decide a flick.
+    if (dt > 0) d.vy = 0.6 * ((e.clientY - d.lastY) / dt) + 0.4 * d.vy
+    d.lastY = e.clientY
+    d.lastT = e.timeStamp
+    moveTo(d)
+  }
+  function release(e: PointerEvent): void {
+    const d = drag
+    if (!d || e.pointerId !== d.id) return
+    drag = null
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', release)
+    window.removeEventListener('pointercancel', release)
+    if (!d.active) return
+    // A pause before letting go is not a flick.
+    if (e.timeStamp - d.lastT > 80) d.vy = 0
+    swallowClick = true
+    setTimeout(() => (swallowClick = false), 0)
+    endDrag(d)
+  }
+  root.addEventListener(
+    'click',
+    (e) => {
+      if (!swallowClick) return
+      swallowClick = false
+      e.stopPropagation()
+      e.preventDefault()
+    },
+    true,
+  )
+
   // ----- paint from the model -----
   let seen: { settings: Settings; weather: WeatherState; resolved: unknown } | null = null
   let view: PanelView | null = null
@@ -331,6 +453,7 @@ export function createSkyPanel(host: SkyPanelHost, opts: SkyPanelOptions = {}): 
   }
   refresh()
 
+  root.prepend(grip)
   const parent = opts.parent ?? document.body
   parent.append(root)
 
@@ -353,6 +476,10 @@ export function createSkyPanel(host: SkyPanelHost, opts: SkyPanelOptions = {}): 
     },
     dispose() {
       clearTimeout(faceTimer)
+      clearTimeout(settle)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', release)
+      window.removeEventListener('pointercancel', release)
       root.remove()
     },
   }

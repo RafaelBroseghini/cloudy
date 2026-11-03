@@ -13,6 +13,10 @@ UI event -> the controller -> game; then the panel repaints from the controller 
 
 Tokens are custom properties on `.sky-panel` in `panel.css`; `data-weather` re-points them, so each weather restyles the panel without new rules. Fonts are self-hosted and resolved by Vite so the Pages base path works. On a phone the panel is a bottom sheet that starts folded, with safe-area insets and 44 px targets.
 
+## Drag to fold
+
+The header (with a grab bar on top) drags the panel up open or down shut, following the pointer, and snaps on release to whichever end it is past or was flicked toward (`sheetDrag.ts`). A press must travel a few pixels before it counts as a drag, so the header's buttons still click, and a drag that started on one swallows that button's click. Move and release are heard on the window, because the folded pill is too short to keep the pointer over it. Under reduced motion the snap is instant. The fold button stays the keyboard and screen-reader way to fold.
+
 ## Accessibility
 
 Sliders are real `<input type="range">` with a `<label>` and `aria-valuetext` set to the word the panel shows. Weather and scene buttons use `aria-pressed`, the fold `aria-expanded`; Tornado is a disabled button until M4. Focus is always visible. Delete or double-click a slider name to unset it. Keys 1..4 still work with a slider or button focused.

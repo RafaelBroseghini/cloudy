@@ -184,6 +184,34 @@ describe('Sky panel DOM', () => {
     expect(fold.getAttribute('aria-expanded')).toBe('true')
   })
 
+  it('dragging the header folds and unfolds it; a press without moving does nothing', () => {
+    const h = mount()
+    const title = q<HTMLElement>('.sky-title')
+    const pe = (type: string, y: number, target: EventTarget) =>
+      target.dispatchEvent(new PointerEvent(type, { pointerId: 1, isPrimary: true, button: 0, bubbles: true, clientX: 50, clientY: y }))
+    const drag = (from: EventTarget, dy: number) => {
+      pe('pointerdown', 300, from)
+      for (let i = 1; i <= 5; i++) pe('pointermove', 300 + (dy * i) / 5, window)
+      pe('pointerup', 300 + dy, window)
+    }
+    pe('pointerdown', 300, title)
+    pe('pointermove', 303, window) // under the slop: still a press
+    pe('pointerup', 303, window)
+    expect(h.panel.isOpen()).toBe(true)
+    drag(title, 200)
+    expect(h.panel.isOpen()).toBe(false)
+    expect(q('.sky-fold').getAttribute('aria-expanded')).toBe('false')
+    drag(title, -200)
+    expect(h.panel.isOpen()).toBe(true)
+    // A drag that starts on the fold button swallows the click that follows it, so the panel does not toggle back.
+    const fold = q<HTMLButtonElement>('.sky-fold')
+    drag(fold, 200)
+    fold.click()
+    expect(h.panel.isOpen()).toBe(false)
+    fold.click()
+    expect(h.panel.isOpen()).toBe(true)
+  })
+
   it('a phone starts folded, and does not remember', () => {
     const h = mount(makeHost(), { narrow: true })
     expect(h.panel.isOpen()).toBe(false)

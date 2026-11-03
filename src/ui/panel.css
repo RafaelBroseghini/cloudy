@@ -144,3 +144,12 @@
   .sky-panel:not([data-motion]) input[type="range"]:active::-webkit-slider-thumb,
   .sky-panel:not([data-motion]) input[type="range"]:active::-moz-range-thumb { transform: none; transition: none; }
 }
+
+/* Drag to fold (panel.ts, sheetDrag.ts): the header is the handle. While dragging the height follows the pointer; on
+   release it springs to the end it snaps to. A grab bar on top says the panel moves. */
+.sky-head { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.sky-panel[data-drag="move"] .sky-head { cursor: grabbing; }
+.sky-grip { position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 99px; background: var(--ink-2); opacity: 0.35; pointer-events: auto; touch-action: none; cursor: grab; }
+.sky-panel[data-open="false"]:not([data-drag]) .sky-grip { display: none; }
+.sky-panel[data-drag="move"] { transition: background-color 0.8s, color 0.8s; }
+.sky-panel[data-drag="snap"] { transition: height 0.3s cubic-bezier(0.2, 0.9, 0.25, 1), background-color 0.8s, color 0.8s; }
