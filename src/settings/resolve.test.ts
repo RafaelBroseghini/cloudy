@@ -19,9 +19,9 @@ import {
   type WeatherState,
 } from '../params/index.ts'
 import { createParallax } from '../render/parallax.ts'
-import { SCENES, DEFAULT_SETTINGS, type Settings } from './scenes.ts'
+import { SCENES, DEFAULT_SETTINGS, SCENE_BREEZE, type Settings } from './scenes.ts'
 import { layersOf } from './controller.ts'
-import { SLIDER_KEYS, parallaxStrengthOf, skyLayerOf, squishOf, userLayerOf, type SliderKey, type SliderValues } from './sliders.ts'
+import { SLIDER_KEYS, breezeSpeedOf, parallaxStrengthOf, skyLayerOf, squishOf, userLayerOf, type SliderKey, type SliderValues } from './sliders.ts'
 
 const resolveSettings = (s: Settings, w: Weather): P => resolve(layersOf(s), w)
 const inRange = (p: P): void => {
@@ -55,7 +55,8 @@ describe('default settings', () => {
     for (const w of WEATHER_STATES) {
       const p = resolveSettings(DEFAULT_SETTINGS, steady(w)) as Record<string, number>
       const old = snapshot[w]
-      for (const k of Object.keys(old)) expect(p[k], `${w}.${k}`).toBe(old[k])
+      // Exception, like `volume`: every scene (and so the default) opens on a calm breeze, so breezeSpeed is no longer the old value.
+      for (const k of Object.keys(old)) expect(p[k], `${w}.${k}`).toBe(k === 'breezeSpeed' ? breezeSpeedOf(SCENE_BREEZE) : old[k])
       const added = Object.keys(p).filter((k) => !(k in old) && FIELD_SPECS[k as FieldKey].group !== 'volume')
       // M6's bloom and grade fields are new (they did not exist before settings); every old field above is unchanged.
       expect(added.filter((k) => !M6_POST.has(k)).sort()).toEqual(['parallaxStrength', 'squish'])
@@ -66,12 +67,12 @@ describe('default settings', () => {
   })
 
   it('building layers from no settings gives empty layers', () => {
-    expect(layersOf(DEFAULT_SETTINGS)).toEqual({ sky: {}, user: {} })
+    expect(layersOf({ ...DEFAULT_SETTINGS, sliders: {} })).toEqual({ sky: {}, user: {} })
   })
 
   it('the sunny scene is the default look; midday and a neutral squish/depth change nothing in the sim', () => {
     const sunny = SCENES.find((s) => s.id === 'sunny') as (typeof SCENES)[number]
-    expect(resolveSettings({ weather: sunny.weather, scene: 'sunny', sliders: sunny.sliders }, steady('clear'))).toEqual(resolve({}, steady('clear')))
+    expect(resolveSettings({ weather: sunny.weather, scene: 'sunny', sliders: sunny.sliders }, steady('clear'))).toEqual(resolve({ sky: {}, user: { breezeSpeed: breezeSpeedOf(SCENE_BREEZE) } }, steady('clear')))
     expect(interactionOf(resolveSettings({ ...DEFAULT_SETTINGS, sliders: { squish: 0.5, timeOfDay: 0.5 } }, steady('rain')))).toEqual(
       interactionOf(resolve({}, steady('rain'))),
     )
