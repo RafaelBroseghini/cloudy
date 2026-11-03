@@ -50,7 +50,7 @@ const interactionSpecs = Object.fromEntries(
   PARAM_KEYS.map((k) => [k, { group: typeKeys.has(k) ? 'types' : 'interaction', kind: 'linear', ...PARAM_SPECS[k] }]),
 ) as Record<ParamKey, FieldSpec<'interaction' | 'types'>>
 
-// Defaults mirror today's uniforms in src/render/sky.ts and cloudField.ts (colours converted to linear).
+// Colours are linear RGB converted from sRGB hex, so they blend per channel in the space the shaders light in.
 export const FIELD_SPECS = {
   ...interactionSpecs,
   // feel: the player's squish slider. A multiplier `resolve` applies to the interaction fields (stiffness, damping, yield, split)
@@ -143,6 +143,29 @@ export const FIELD_SPECS = {
   fxFlashX: f('postfx', 0, 1, 0.5),
   /** Screen y (0 bottom .. 1 top) of the flash's local glow; lightning that starts in a cumulonimbus moves it there. */
   fxFlashY: f('postfx', 0, 1, 0.55),
+  // Bloom (on the linear frame before the output transform) and the colour grade (a 3D LUT after it). See docs/RENDER.md.
+  /** Bloom strength (0 = none; the pass still runs, so nothing recompiles). */
+  fxBloom: f('postfx', 0, 2, 0.2),
+  /** Linear luminance where the bloom starts. Sunlit cloud tops reach about 1.9 at midday, so only their hottest rims glow; a flash lowers it (look.ts). */
+  fxBloomThreshold: f('postfx', 0, 3, 1.4),
+  /** Bloom spread: 0 keeps the glow tight, 1 weights the widest mips. */
+  fxBloomRadius: f('postfx', 0, 1, 0.5),
+  /** How much of the colour grade applies (0 = none, 1 = all of it). */
+  fxGrade: f('postfx', 0, 1, 1),
+  /** S-curve contrast around a mid-grey (1 = none). */
+  fxContrast: f('postfx', 0.5, 2, 1.06),
+  /** Saturation (1 = none, 0 = grey). */
+  fxSaturation: f('postfx', 0, 2, 1.05),
+  /** White balance: positive warms, negative cools. */
+  fxTemperature: f('postfx', -1, 1, 0),
+  /** Black level: positive lifts the blacks, negative crushes them. */
+  fxLift: f('postfx', -0.2, 0.2, 0),
+  /**
+   * Split toning: colour multipliers on the shadows and the highlights (white = neutral), weighted by (1 - luma)^2 and luma^2.
+   * Stored linear like every colour field, so a pale hex multiplies harder than it looks (`#e2e9ff` takes red to 0.76).
+   */
+  ...rgb('postfx', 'fxShadowTint', '#ffffff'),
+  ...rgb('postfx', 'fxHighlightTint', '#ffffff'),
 } as const satisfies Record<string, FieldSpec>
 
 export type FieldKey = keyof typeof FIELD_SPECS
@@ -150,7 +173,7 @@ export type Values = { [K in FieldKey]: number }
 /** Any subset of fields; unset fields fall through to earlier layers. */
 export type Layer = Partial<Values>
 export type KeysOf<G extends Group> = { [K in FieldKey]: (typeof FIELD_SPECS)[K]['group'] extends G ? K : never }[FieldKey]
-export type ColorName = 'skyTop' | 'skyHorizon' | 'skyBottom' | 'skySun' | 'cloudLit' | 'cloudMid' | 'cloudShade'
+export type ColorName = 'skyTop' | 'skyHorizon' | 'skyBottom' | 'skySun' | 'cloudLit' | 'cloudMid' | 'cloudShade' | 'fxShadowTint' | 'fxHighlightTint'
 
 export const FIELD_KEYS = Object.keys(FIELD_SPECS) as FieldKey[]
 

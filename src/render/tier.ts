@@ -28,6 +28,8 @@ export interface Tier {
   /** Sun-march steps and ring-AO taps of the lit scenery layers. */
   sceneSteps: number;
   aoTaps: number;
+  /** Bloom's working resolution, relative to the drawing buffer (its five blur mips halve from there). Bloom is on every tier. */
+  bloomScale: number;
 }
 
 /**
@@ -37,9 +39,9 @@ export interface Tier {
 export const MARCH_MAX_PIXELS = { hi: 750_000, mid: 500_000, low: 150_000 } as const;
 
 export const TIERS: Readonly<Record<TierName, Tier>> = {
-  hi: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.hi, steps: 28, lightSteps: 6, octaves: 8, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 2, sceneSteps: 5, aoTaps: 8 },
-  mid: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.mid, steps: 16, lightSteps: 4, octaves: 4, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 1.5, sceneSteps: 4, aoTaps: 6 },
-  low: { marchScale: 0.6, marchMaxPixels: MARCH_MAX_PIXELS.low, steps: 12, lightSteps: 4, octaves: 2, fine: 1, ao: 0, sharp: 1.5, jitter: 0, bake: 0.25, pixelRatio: 1.5, sceneSteps: 3, aoTaps: 4 },
+  hi: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.hi, steps: 28, lightSteps: 6, octaves: 8, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 2, sceneSteps: 5, aoTaps: 8, bloomScale: 0.5 },
+  mid: { marchScale: 0.5, marchMaxPixels: MARCH_MAX_PIXELS.mid, steps: 16, lightSteps: 4, octaves: 4, fine: 1, ao: 1, sharp: 0, jitter: 1, bake: 0.3, pixelRatio: 1.5, sceneSteps: 4, aoTaps: 6, bloomScale: 0.5 },
+  low: { marchScale: 0.6, marchMaxPixels: MARCH_MAX_PIXELS.low, steps: 12, lightSteps: 4, octaves: 2, fine: 1, ao: 0, sharp: 1.5, jitter: 0, bake: 0.25, pixelRatio: 1.5, sceneSteps: 3, aoTaps: 4, bloomScale: 0.25 },
 };
 
 /**
