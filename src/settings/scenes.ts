@@ -22,25 +22,28 @@ export interface SceneDef {
   readonly id: SceneId
   readonly name: string
   readonly weather: WeatherState
-  /** Only the sliders the scene sets (sunset and dusk set the time of day); every other slider is cleared. */
+  /** Only the sliders the scene sets (every scene sets the breeze; sunset and dusk also the time of day); every other slider is cleared. */
   readonly sliders: SliderValues
   /** The sim layout the scene respawns the clouds with. */
   readonly layout: SceneName
 }
 
+/** Every scene opens nearly windless; the player raises it with the Breeze slider. */
+export const SCENE_BREEZE = 0.05
+
 export const SCENES: readonly SceneDef[] = [
-  { id: 'sunny', name: 'Sunny', weather: 'clear', sliders: {}, layout: 'clear' },
-  { id: 'lone', name: 'Lone cloud', weather: 'clear', sliders: { timeOfDay: 0.46 }, layout: 'lone' },
-  { id: 'sunset', name: 'Sunset', weather: 'clear', sliders: { timeOfDay: 0.78 }, layout: 'clear' },
-  { id: 'dusk', name: 'Purple dusk', weather: 'clear', sliders: { timeOfDay: 0.97 }, layout: 'clear' },
-  { id: 'rainy', name: 'Rainy', weather: 'rain', sliders: {}, layout: 'rain' },
-  { id: 'storm', name: 'Storm', weather: 'thunder', sliders: {}, layout: 'thunder' },
+  { id: 'sunny', name: 'Sunny', weather: 'clear', sliders: { breeze: SCENE_BREEZE }, layout: 'clear' },
+  { id: 'lone', name: 'Lone cloud', weather: 'clear', sliders: { timeOfDay: 0.46, breeze: SCENE_BREEZE }, layout: 'lone' },
+  { id: 'sunset', name: 'Sunset', weather: 'clear', sliders: { timeOfDay: 0.78, breeze: SCENE_BREEZE }, layout: 'clear' },
+  { id: 'dusk', name: 'Purple dusk', weather: 'clear', sliders: { timeOfDay: 0.97, breeze: SCENE_BREEZE }, layout: 'clear' },
+  { id: 'rainy', name: 'Rainy', weather: 'rain', sliders: { breeze: SCENE_BREEZE }, layout: 'rain' },
+  { id: 'storm', name: 'Storm', weather: 'thunder', sliders: { breeze: SCENE_BREEZE }, layout: 'thunder' },
 ]
 
 export const sceneDef = (id: SceneId): SceneDef => SCENES.find((s) => s.id === id) as SceneDef
 
 /** What the game opens with when nothing is saved: the sunny scene (today's look). */
-export const DEFAULT_SETTINGS: Settings = { weather: 'clear', scene: 'sunny', sliders: {} }
+export const DEFAULT_SETTINGS: Settings = { weather: 'clear', scene: 'sunny', sliders: { breeze: SCENE_BREEZE } }
 
 export const settingsOfScene = (id: SceneId): Settings => {
   const s = sceneDef(id)

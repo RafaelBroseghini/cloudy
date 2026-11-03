@@ -4,9 +4,12 @@ import { createDriveRunner, resolve, steady, targetWeather, type P } from '../pa
 import { FIXED_DT } from '../sim/fixedStep.ts'
 import { mulberry32, type SceneName } from '../sim/scene.ts'
 import { WEATHER_BLEND_S, createSettingsController, layersOf, type SettingsController } from './controller.ts'
-import { DEFAULT_SETTINGS, layoutOf, type Settings } from './scenes.ts'
+import { DEFAULT_SETTINGS, SCENE_BREEZE, layoutOf, type Settings } from './scenes.ts'
 import { randomize } from './randomize.ts'
-import { strikeRateOf } from './sliders.ts'
+import { breezeSpeedOf, strikeRateOf } from './sliders.ts'
+
+/** The default look: clear weather with only the scenes' calm breeze on top. */
+const calmDefault = (): P => resolve({ sky: {}, user: { breezeSpeed: breezeSpeedOf(SCENE_BREEZE) } }, steady('clear'))
 
 function setup(initial: Settings = DEFAULT_SETTINGS) {
   const sink = { setParams: () => {}, setWind: () => {} }
@@ -38,7 +41,7 @@ describe('sliders', () => {
     expect(t.p().rainRate).toBe(0)
     t.c.setSlider('rain', 0.8)
     expect(t.p().rainRate).toBe(0.8)
-    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'custom', sliders: { rain: 0.8 } })
+    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'custom', sliders: { breeze: SCENE_BREEZE, rain: 0.8 } })
     expect(t.saved.at(-1)).toEqual(t.c.get())
     expect(t.spawned).toEqual([])
   })
@@ -50,7 +53,7 @@ describe('sliders', () => {
     t.c.clearSlider('rain')
     t.c.clearSlider('breeze')
     expect(t.c.get().sliders).toEqual({})
-    expect(t.p()).toEqual(resolve({}, steady('clear')))
+    expect(t.p()).toEqual(resolve({ sky: {}, user: {} }, steady('clear')))
   })
 
   it('sliderState shows unset sliders where P puts them, and thunder disabled outside thunder weather', () => {
@@ -90,7 +93,7 @@ describe('scenes', () => {
   it('sunset from sunny only changes the sky: same layout, no respawn; re-applying a scene respawns', () => {
     const t = setup()
     t.c.applyScene('sunset')
-    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'sunset', sliders: { timeOfDay: 0.78 } })
+    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'sunset', sliders: { timeOfDay: 0.78, breeze: SCENE_BREEZE } })
     expect(t.spawned).toEqual([])
     expect(t.p().skySunPosX).toBeGreaterThan(0.9)
     t.c.applyScene('sunset')
@@ -116,8 +119,8 @@ describe('scenes', () => {
     t.c.setSliders({ rain: 1, squish: 0, depth: 0, timeOfDay: 0.1 })
     t.c.applyScene('sunny')
     t.settle()
-    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'sunny', sliders: {} })
-    expect(t.p()).toEqual(resolve({}, steady('clear')))
+    expect(t.c.get()).toEqual({ weather: 'clear', scene: 'sunny', sliders: { breeze: SCENE_BREEZE } })
+    expect(t.p()).toEqual(calmDefault())
   })
 
   it('a raw weather change (keys, harness) is followed by scene application even when settings say the same weather', () => {
@@ -169,7 +172,7 @@ describe('randomize and reset', () => {
     expect(t.cleared()).toBe(1)
     expect(t.saved.at(-1)?.scene).not.toBe('sunny') // the earlier storm save; reset itself saves nothing
     t.settle()
-    expect(t.p()).toEqual(resolve({}, steady('clear')))
+    expect(t.p()).toEqual(calmDefault())
   })
 })
 
