@@ -3,6 +3,7 @@
 [![CI](https://github.com/RafaelBroseghini/cloudy/actions/workflows/ci.yml/badge.svg)](https://github.com/RafaelBroseghini/cloudy/actions/workflows/ci.yml)
 [![Deploy to GitHub Pages](https://github.com/RafaelBroseghini/cloudy/actions/workflows/pages.yml/badge.svg)](https://github.com/RafaelBroseghini/cloudy/actions/workflows/pages.yml)
 [![Play live](https://img.shields.io/badge/play-live-4a90e2)](https://rafaelbroseghini.github.io/cloudy/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![three.js](https://img.shields.io/badge/three.js-r187%20WebGPU-000000)
 ![Vite](https://img.shields.io/badge/Vite-8-646cff)
@@ -67,3 +68,7 @@ npm run dev        # http://127.0.0.1:43200 (add ?backend=webgl to force WebGL2)
 Commits follow conventional commits (`feat(scope):`, `fix(scope):`, `test:`, `docs:`, `chore:`). Before you open a pull request, run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`, and `npm run verify` for anything that renders.
 
 Thunder audio clips in `public/audio/` must be CC0 or public domain.
+
+## License
+
+Released under the [MIT License](LICENSE).
