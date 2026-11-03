@@ -58,19 +58,20 @@ Drive and read state through `window.__GAME__` (`src/harness.ts`), never by scra
 - Model states as discriminated unions so illegal states do not compile (weather, pointer present/absent, transitions).
 - Tests sit next to code as `*.test.ts`. Prefer fast-check properties for sim invariants (see `docs/PLAN.md`).
 - Match the surrounding code. Comments say why, not what.
+- Code holds the what: values, ranges, defaults and API live in code and its JSDoc. Docs hold the why: decisions, contracts, gotchas and measurements. Docs name symbols (`TIERS`, `FIELD_SPECS`) instead of copying their values, so there is nothing to keep in sync.
 
 ## Where things are
 
 - `docs/PLAN.md`: target design, milestones, invariants and perf targets.
-- `docs/SIM.md`: how the sim maps onto Box2D, where it departs from PLAN, and every param.
-- `docs/PARAMS.md`: layer order and the dev panel (`` ` `` or `?dev` opens it; tune any field live).
-- `docs/SETTINGS.md`: the player sliders, scenes, randomize and saved-settings format (`src/settings`).
+- `docs/SIM.md`: how the sim maps onto Box2D and where it departs from PLAN, and why.
+- `docs/PARAMS.md`: why the param layers stack as they do, the weather drive, strikes, and the dev panel (`` ` `` or `?dev`; tune any field live).
+- `docs/SETTINGS.md`: why the player settings are shaped as they are, and storage (`src/settings`).
 - `docs/UI.md`: the Sky panel (structure, tokens, a11y, state flow, reduced motion).
-- `docs/RENDER.md`: render passes, how the play clouds are raymarched as real volumes, quality tiers and costs.
-- `docs/HARNESS.md`: the full `window.__GAME__` API with a split-then-merge example.
+- `docs/RENDER.md`: render passes and post, quality tiers, measured costs.
+- `docs/HARNESS.md`: how to drive `window.__GAME__` without fooling yourself, with examples (the API is `GameHarnessApi` in `src/harness.ts`).
 - `.agents/skills/verify`: browser verification (real WebGPU needs a visible window under WSLg).
-- `public/audio/`: thunder clips; every file must be CC0/public domain and credited in `CREDITS.md`.
+- `public/audio/`: thunder clips; every file must be CC0/public domain and credited in `public/audio/CREDITS.md`.
 
 ## Keep this file small
 
-It is loaded into every agent's context. Add a rule only if an agent would get it wrong without it. Put explanations and numbers in `docs/`.
+It is loaded into every agent's context. Add a rule only if an agent would get it wrong without it. Put explanations in `docs/`; numbers stay in code.

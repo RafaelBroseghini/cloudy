@@ -1,49 +1,39 @@
 # Harness: `window.__GAME__`
 
-Installed always (dev and preview). World units: y up, origin at screen centre, view height 10, width `10 * aspect`.
+The API is `GameHarnessApi` in `src/harness.ts`; each method's JSDoc says what it does. This file covers how to use it without fooling yourself. It is installed in dev and preview builds alike.
 
-- `getState()`: `{ ready, backend, tier, render, frame, step, paused, clouds, types, blobs, springs, cursor: {x,y,present}, densityAtCursor, view: {width,height}, weather, rainRate }`. `types` is the number of clouds per dominant type, `{ cumulus, stratus, cumulonimbus }` (sums to `clouds`). `view` is the visible world size; `cursor` is the sim cursor (what is drawn). `weather` is `{ kind: "steady", state, progress: 1 }` or `{ kind: "transition", from, to, progress }` (progress 0..1, linear in weather time; the blend weight is its smoothstep). `rainRate` is the resolved `P.rainRate` right now. `audio` is `{ state, outputLatency }`: the AudioContext state (`"none"` until the first pointerdown/touchend/keydown creates it, then `"running"`, `"suspended"`, ...) and its output latency in seconds (null if unknown). `strikes` is `{ count, last }`, `last` the latest strike record (see `forceStrike`) or null. `settings` is `{ weather, scene }`: the weather the buttons last chose and the scene id (`custom` after a tweak, `shuffled` after the dice).
-- `tier` is the render quality tier (`"hi" | "mid" | "low"`, default `mid` on desktop; `setTier(tier)` switches it live, `?tier=` sets it at load; see `docs/RENDER.md`). It changes only the cloud march's resolution, step counts and octaves, never the sim. `render` is the cloud pass: `{ tier, marchPixels, tileBytes, uploadBytes, worstBlobsPerTile, overflowDropped, noiseReady }`: pixels of the march target, bytes of the tile texture and of everything the clouds upload per frame (at most 16,384), the longest tile list before any cap, entries dropped by the caps (0 on every shipped scene), and whether the 3D erosion noise has finished baking (the first second or two after load the clouds are smooth; wait for it before screenshots).
-- `debugView("alpha" | "clouds" | null)`: diagnostics for measurements, not for play. `"alpha"` draws the play clouds' alpha as grey (silhouette versus the sim's `densityAt`, see the polish notes in `docs/RENDER.md`), `"clouds"` the clouds alone over mid grey (no sky or scenery), `null` the normal view. `debugEye(side | null)` puts the cloud eye where a settled pointer at `side` (-1 left edge .. 0 middle .. 1 right edge) would, at default Depth, with no idle sway, and freezes the billow phase, so two shots differ only by the eye (parallax measurements); `null` releases.
-- `bench(frames?)`: async; time `frames` (default 60) full renders with the GPU drained after each batch of 6, and return `{ frames, median, min, p90 }` in ms per frame (a diagnostic: WebGPU waits on `onSubmittedWorkDone`, WebGL2 on a fence; nothing is read back, and the loop's own renders pause meanwhile). Headed on a real GPU for real numbers.
-- `pause(on)`: while paused the rAF loop still renders but does not advance the sim.
-- `tick(ms)`: advance exactly `round(ms / (1000/60))` fixed steps synchronously (works paused), then refresh the renderer's blobs and look. Weather time advances by one `FIXED_DT` per step, so `tick(ms)` moves a weather transition by the same ms and a paused harness run is deterministic. `drag` does the same.
-- `pointer(x, y)` / `pointerAbsent()`: override the live pointer (world units) until `pointerRelease()` hands control back to real input.
-- `drag(x0, y0, x1, y1, seconds)`: move the overridden pointer linearly over `seconds` of fixed steps, stepping the sim as it goes; leaves the pointer at `(x1, y1)`. Put the pointer at the start and `tick` first so the cursor is already there.
-- `loadScene("m1" | "empty" | "clear" | "rain" | "thunder" | "mixed" | "lone")`: reset the sim to a named scene sized to the current view. `m1` is the original three cumulus (kept for verify); `lone` is one big cumulus. `clear`, `rain`, `thunder`, `mixed` mix cumulus, stratus and cumulonimbus (see `docs/SIM.md`); the game opens with the one matching its initial weather (tornado: `mixed`) and does not respawn clouds on a weather change, so call `loadScene` after `setWeather` to see a weather's own mix.
-- `setWeather(state, seconds)`: `state` is `"clear" | "rain" | "thunder" | "tornado"`; start a blend to it over `seconds` of weather time (0 = instant). From mid-blend it restarts from the current values (no jump); asking for the state already being approached is ignored. Also on the URL (`?weather=rain`, initial state) and keys 1..4 (4 s blends).
-- `forceStrike({ intensity?, d?, x? })`: fire a strike now and return its record `{ id, tStrike, clock, d, intensity, x, latency, scheduledThunderAt, skippedReason }`. `intensity` 0..1, `d` seconds from flash peak to thunder, `x` 0..1 across the screen; missing fields are drawn from a separate seeded stream. Without an explicit `x`, the strike starts inside a cumulonimbus when one is on screen (the record's `x` and `y` then name the point). `tStrike` is the flash PEAK, 0.1 s ahead of the clock `clock` (`"audio"`: AudioContext render clock; `"perf"`: `performance.now()/1000`, used while audio is locked). `scheduledThunderAt = tStrike + d - latency` on the audio clock, or null with `skippedReason` one of `locked | late | not-loaded | voice-cap`. Scheduled strikes (thunder weather, `strikeRate`) fire from the fixed steps, so `tick` advances them too; they are stamped with the real clock when they fire.
-- `flash()`: the current flash value (0..1) read off the strike clock (what `fxFlash` is). `holdFlash(tau | null)`: freeze the latest strike's flash at `tau` seconds from its peak (negative = during the rise, peak = 0) for screenshots; `null` releases.
-- Player settings (`docs/SETTINGS.md`; these are the only calls that persist to localStorage, after 300 ms): `getSettings()` is `{ weather, scene, sliders }` (sliders: only the set ones, 0..1). `setSlider(key, v)` / `setSliders(partial)` / `clearSlider(key)` with key one of `timeOfDay | breeze | puffiness | rain | thunder | depth | squish` (clamped; the scene becomes `custom`). `applyScene(id)` (`sunny | lone | sunset | dusk | rainy | storm`) blends the weather over 4 s of weather time, sets the scene's sliders (clearing the rest) and respawns the clouds when the layout differs or the scene is re-applied. `setWeatherPreset(state)` is the weather button: weather only, clears the `rain` and `thunder` sliders, no respawn. `randomize(seed?)` rolls the dice (seeded when given) and returns `{ weather, sliders, sceneLayout }`. `resetSettings()` goes back to sunny and forgets the saved settings. `sliderState()` is, per slider, `{ value, set, enabled, word }`: `value` the effective 0..1 position (the set value, else read back from P), `enabled` false for `thunder` unless the weather is thunder (then `word` is "Storm weather only"). Raw `setWeather`, `loadScene` and keys 1..4 do not write storage. `?reset` forgets saved settings at load; `?weather=` wins over the saved weather.
-- Sky panel (`docs/UI.md`): `ui()` is `{ ready, open, weather, scene, subtitle, sliders }` as painted now (`sliders`: `[{ key, label, value, percent, word, disabled, set }]`, thunder `disabled` outside thunder weather); `ready` is false until the panel's lazy chunk is built (poll it after load). `setPanelOpen(open)` folds or unfolds it (a phone starts folded; desktop remembers the choice under `localStorage` `cloudy:ui`). Drive it like a player with real clicks on `.sky-dice`, `.sky-fold`, `[data-weather-btn]`, `[data-scene]`, `.sky-reset` and `input[data-slider="rain"]` (agent-browser `click`, `mouse`, `press ArrowRight`).
-- `resolved()`: the full flat resolved `P` (every field, numbers) as the game sees it now: defaults + scene + weather (+ user + dev + transient).
-- `setDev(partial)` / `clearDev(keys?)` / `getDev()`: the dev layer (any field, interaction included; the dev panel drives the same one). `setDev` clamps each value to its range and ignores non-finite ones; overrides persist across weather changes and win over weather/user, but the strike flash (lighting/post-FX only) still goes on top. `clearDev()` drops all overrides, `clearDev(["k_s"])` just those keys (they fall back to weather). `getDev()` is a copy of what is stored; `resolved()` shows the effect, including the `d_touch < d_release` clamp. Open the panel with ` or `?dev`.
-- `getParams()` / `setParams(partial)`: read / write sim interaction params (clamped; see `src/sim/params.ts`). `getParams()` returns the resolved weather values, because the game pushes `interactionOf(P)` to the sim whenever it changes. A manual `setParams` lasts until the next weather-driven change.
-- `cloudCentres()`: `[{ id, x, y, blobs, type }]`, mass-weighted centre per cloud, to aim a drag; `type` is the dominant type (`"cumulus" | "stratus" | "cumulonimbus"`).
-- `densityAt(x, y)`: the sim's density at a world point. `constants()`: `{ cloudThreshold, influenceFactor }`, the shared values from `src/sim/blobBuffer.ts`; cloud cores must have `densityAt >= cloudThreshold` or they render faint.
+- World units: y up, origin at the screen centre, view height 10. `getState().view` gives the visible size.
+- Determinism: `pause(true)` then `tick`/`drag`. Weather time and scheduled strikes advance with the fixed sim steps, so a paused run gives the same result on any machine and either backend (verify compares them).
+- The real mouse wins unless you override it: call `pointerAbsent()` (or `pointer`) before `loadScene` in a headed browser, or the desktop cursor leaks in.
+- Audio unlocks only on real input (agent-browser `mouse` / `click`), never on a scripted event. Until then strikes flash with no thunder (`skippedReason: "locked"`).
+- Changing weather never respawns clouds: call `loadScene` after `setWeather` to see that weather's own composition.
+- Before a screenshot, wait for `getState().render.noiseReady` (the clouds are smooth ellipsoids for the first second) and for the Sky panel's `ui().ready` if it matters.
+- `debugView` and `debugEye` are for measurements: they show the frame ungraded and with no bloom (see `docs/RENDER.md`).
+- Only the settings calls (`setSlider`, `applyScene`, `randomize`, ...) persist to localStorage. Raw `setWeather`, `loadScene` and keys 1..4 do not.
+- `bench` only means something headed on a real GPU, and only against another build in the same session.
 
-Force a split, then a merge (`tau` is the merge cooldown, 1.5 s by default):
+Force a split, then a merge (`tau` is the merge cooldown):
 
 ```js
-const g = __GAME__; g.pause(true); g.loadScene("m1"); g.tick(1000);
+const g = __GAME__; g.pause(true); g.pointerAbsent(); g.loadScene("m1"); g.tick(1000);
 const big = g.cloudCentres().sort((a, b) => b.blobs - a.blobs)[0];
 g.pointer(big.x - 6, big.y); g.tick(1500); g.drag(big.x - 6, big.y, big.x + 6, big.y, 0.15); // fast drag: clouds goes up
 g.tick(3000); /* slowly drag one piece into another, pointerAbsent(), tick past tau: clouds goes down */
 ```
 
-Rain, paused and deterministic (the rain look needs a few rendered frames to settle; weather time follows `tick`):
+Rain, paused and deterministic:
 
 ```js
 const g = __GAME__; g.pause(true); g.loadScene("m1");
-g.setWeather("rain", 4); g.tick(2000);   // halfway: getState().weather = { kind: "transition", progress: 0.5, ... }
-g.tick(2100);                            // done: { kind: "steady", state: "rain", progress: 1 }, rainRate 0.7
-g.resolved().windX; g.getParams().k_s;   // resolved P, and the sim's interaction params (weather's values)
+g.setWeather("rain", 4); g.tick(2000);   // halfway: getState().weather is a transition at progress 0.5
+g.tick(2100);                            // steady rain
+g.resolved().windX; g.getParams().k_s;   // resolved P, and the sim's interaction params
 ```
 
-Thunder, audio unlocked by a real click (the pointer events must be real input, e.g. `agent-browser mouse move/down/up`):
+Thunder, after a real click has unlocked audio:
 
 ```js
-const g = __GAME__; g.getState().audio;                  // { state: "running", outputLatency: 0.1 } after the click
+const g = __GAME__; g.getState().audio;                  // state "running"
 const r = g.forceStrike({ intensity: 1, d: 1.5, x: 0.3 }); // r.scheduledThunderAt - r.tStrike = r.d - r.latency
 g.holdFlash(0); /* screenshot at the flash peak */ g.holdFlash(null);
 ```

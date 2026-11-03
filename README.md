@@ -56,12 +56,12 @@ npm run dev        # http://127.0.0.1:43200 (add ?backend=webgl to force WebGL2)
 ## Documentation
 
 - [`docs/PLAN.md`](docs/PLAN.md): target design, milestones and invariants
-- [`docs/SIM.md`](docs/SIM.md): how the simulation maps onto Box2D, and every parameter
-- [`docs/RENDER.md`](docs/RENDER.md): render passes, raymarched volumes and quality tiers
-- [`docs/PARAMS.md`](docs/PARAMS.md): layer order and the live dev panel (`` ` `` or `?dev`)
-- [`docs/SETTINGS.md`](docs/SETTINGS.md): player sliders, scenes and the saved-settings format
+- [`docs/SIM.md`](docs/SIM.md): how the simulation maps onto Box2D, and where it departs from the plan
+- [`docs/RENDER.md`](docs/RENDER.md): render passes, raymarched volumes, bloom and grading, quality tiers
+- [`docs/PARAMS.md`](docs/PARAMS.md): parameter layers, weather, strikes and the live dev panel (`` ` `` or `?dev`)
+- [`docs/SETTINGS.md`](docs/SETTINGS.md): player sliders, scenes and saved settings
 - [`docs/UI.md`](docs/UI.md): the Sky panel, its tokens, accessibility and reduced motion
-- [`docs/HARNESS.md`](docs/HARNESS.md): the `window.__GAME__` API used by tests and verification
+- [`docs/HARNESS.md`](docs/HARNESS.md): driving the game through `window.__GAME__` in tests and verification
 
 ## Contributing
 
