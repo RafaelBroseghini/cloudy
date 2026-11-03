@@ -1,6 +1,7 @@
 import type { FieldKey, Layer, P, WeatherReport, WeatherState } from "./params/index.ts";
 import type { StrikeForce, StrikeReport } from "./strikes/index.ts";
 import type { BenchResult } from "./render/bench.ts";
+import type { FrameStatsReport } from "./render/frameStats.ts";
 import type { RenderStats } from "./render/scene.ts";
 import type { TierName } from "./render/tier.ts";
 import type { Randomized, SceneId, SceneRef, Settings, SliderKey, SliderState, SliderValues } from "./settings/index.ts";
@@ -14,6 +15,8 @@ export interface GameState {
   tier: TierName;
   /** What the render passes cost and carry (`RenderStats` in src/render/scene.ts). */
   render: RenderStats;
+  /** Frame times of the frames actually rendered, over the last minute, and the display's own rate (`FrameStatsReport`). */
+  stats: FrameStatsReport;
   /** Rendered frames. */
   frame: number;
   /** Fixed sim steps run since the last scene load. */

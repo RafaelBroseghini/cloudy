@@ -1,0 +1,20 @@
+/* `?stats` readout (statsOverlay.ts). Top-right inside the safe area, clear of the Sky panel (bottom-left on desktop, the
+   bottom sheet on a phone). It sits under the panel (z-index 20), so an open sheet on a phone covers it rather than its
+   buttons; it never takes input. */
+.stats-overlay {
+  position: fixed;
+  z-index: 10;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  right: max(8px, env(safe-area-inset-right, 0px));
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(10 20 35 / 0.62);
+  color: #f2f6fb;
+  font: 500 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}

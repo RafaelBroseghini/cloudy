@@ -16,6 +16,7 @@ import { flashLayer, createStrikeDirector, nimbusAnchors } from "./strikes/index
 import { applyLook } from "./render/look.ts";
 import { createRenderer } from "./render/renderer.ts";
 import { createScene } from "./render/scene.ts";
+import { createFrameStats } from "./render/frameStats.ts";
 import { VIEW_HEIGHT, viewWidth } from "./render/view.ts";
 import {
   cloudCentresFromBuffer,
@@ -173,6 +174,11 @@ async function main(): Promise<void> {
     scene.setAir(air.x, air.y);
   };
 
+  // Times rendered frames (not rAF callbacks) for `getState().stats` and the `?stats` overlay.
+  const frameStats = createFrameStats();
+  // A hidden tab gets no rAF callbacks; the gap on return is not a slow frame.
+  document.addEventListener("visibilitychange", () => frameStats.gap());
+
   /** One fixed step of the world: weather time advances with the sim, so ticks and rAF stay in lockstep. */
   let simStepMs = 0;
   const stepWorld = (): void => {
@@ -194,6 +200,7 @@ async function main(): Promise<void> {
         backend,
         tier: scene.getTier(),
         render: scene.stats(),
+        stats: frameStats.report(),
         frame,
         step: s.step,
         paused,
@@ -324,6 +331,7 @@ async function main(): Promise<void> {
         return await scene.bench(frames);
       } finally {
         benching = false;
+        frameStats.gap();
       }
     },
     resolved: () => ({ ...drive.drive.p }),
@@ -351,6 +359,8 @@ async function main(): Promise<void> {
   let lastRenderMs = -Infinity;
 
   renderer.setAnimationLoop((ms) => {
+    const t0 = performance.now();
+    frameStats.tick(ms);
     const elapsed = lastMs === null ? 0 : (ms - lastMs) / 1000;
     lastMs = ms;
 
@@ -369,9 +379,19 @@ async function main(): Promise<void> {
     scene.setTime(ms / 1000);
     scene.render();
     frame += 1;
+    frameStats.render(ms, performance.now() - t0);
   });
 
   ready = true;
+
+  // `?stats`: a small frame-time readout for checking real devices; its own chunk, loaded only when asked for.
+  if (new URLSearchParams(search).has("stats")) {
+    import("./ui/statsOverlay.ts")
+      .then(({ createStatsOverlay }) =>
+        createStatsOverlay({ stats: () => frameStats.report(), tier: () => scene.getTier(), backend, simStepMs: () => simStepMs }),
+      )
+      .catch((err: unknown) => console.error("stats overlay failed to load", err));
+  }
 
   // The panel only talks to the settings controller (UI -> controller -> game) and reads back what it shows.
   const panelHost: SkyPanelHost = {

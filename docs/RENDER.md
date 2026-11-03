@@ -31,6 +31,10 @@ GPU ms per frame, measured 2026-11-02 with `__GAME__.bench` (queue drained per b
 
 Budgets at this size: hi 15 ms, mid 8, low 4.5. Post costs 0.35 to 0.55 ms of that on every cell. Low has the least room (thunder at 4.1 to 4.2), with bloom already at a sixteenth of its pixels. The composite, scenery bake and rain are about 2 to 3 ms whatever the tier; the march is the rest. Phone GPUs are unmeasured.
 
+## Frame stats on a device (`?stats`, `frameStats.ts`)
+
+`__GAME__.bench` measures GPU cost on a desk; a real phone is read with `?stats`, a readout in the top-right corner (also `getState().stats`). It times the frames that are actually rendered, not rAF callbacks: the loop renders at most `RENDER_INTERVAL_MS` apart, so on a fast screen most callbacks draw nothing. The display's own rate (median rAF interval) is shown beside it, so a frame rate held down by that cap reads differently from a slow GPU. The percentiles cover the last `STATS_WINDOW_MS`, PLAN's p95 target window, so wait that long after load before reading them: the first seconds include shader warm-up and the noise bake. A hidden tab or a `bench` run breaks the interval rather than counting as one slow frame. It reads no GPU timer (nothing is read back), so it cannot split CPU from GPU time; `cpu p95` is only the main thread's share.
+
 ## Look checks (how the volumes were judged)
 
 All through the harness (`debugView`, `debugEye`, `densityAt`), 1280x800, WebGPU on the real GPU, Sky panel folded.
