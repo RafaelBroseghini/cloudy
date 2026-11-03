@@ -1,6 +1,6 @@
 // Frame-time statistics for the `?stats` overlay and `getState().stats` (pure: no DOM, no three). It times the frames that
-// are actually rendered, not rAF callbacks: the loop renders at most `RENDER_INTERVAL_MS` apart, so on a fast screen most
-// callbacks draw nothing and a rAF counter would report the display's rate, not the game's. The display's rate is kept
+// are actually rendered, not rAF callbacks: the loop divides a fast display's refresh down (`pacing.ts`), so on a 120 Hz
+// screen every other callback draws nothing and a rAF counter would report the display's rate, not the game's. The display's rate is kept
 // separately so a reader can tell a capped frame rate from a slow one.
 
 /** How far back the percentiles look: PLAN's target is a p95 over 60 s. */

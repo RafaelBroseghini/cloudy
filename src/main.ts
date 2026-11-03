@@ -17,6 +17,7 @@ import { applyLook } from "./render/look.ts";
 import { createRenderer } from "./render/renderer.ts";
 import { createScene } from "./render/scene.ts";
 import { createFrameStats } from "./render/frameStats.ts";
+import { createPacer } from "./render/pacing.ts";
 import { VIEW_HEIGHT, viewWidth } from "./render/view.ts";
 import {
   cloudCentresFromBuffer,
@@ -30,10 +31,6 @@ import { createFixedStepper } from "./sim/fixedStep.ts";
 import { mulberry32 } from "./sim/scene.ts";
 import type { SkyPanel, SkyPanelHost } from "./ui/panel.ts";
 
-/** Render at most this often; the sim's fixed step already decouples behaviour from display rate. */
-const RENDER_INTERVAL_MS = 1000 / 60;
-/** rAF timestamps jitter by a ms or so; without slack a 60 Hz display would skip every other frame. */
-const RENDER_SLACK_MS = 2;
 /** Dev shortcut: keys 1..4 blend to clear, rain, thunder, tornado over this many seconds. */
 const KEY_TRANSITION_S = 4;
 /** Seed of the strike process: a run replays the same strikes for a seed. */
@@ -357,6 +354,8 @@ async function main(): Promise<void> {
 
   let lastMs: number | null = null;
   let lastRenderMs = -Infinity;
+  // Which callbacks render: every refresh up to a whole multiple of 60 Hz, then evenly divided (pacing.ts).
+  const pacer = createPacer();
 
   renderer.setAnimationLoop((ms) => {
     const t0 = performance.now();
@@ -368,7 +367,7 @@ async function main(): Promise<void> {
     sim.setPointer(currentPointer());
     if (!paused) stepper.advance(elapsed, stepWorld);
 
-    if (benching || ms - lastRenderMs < RENDER_INTERVAL_MS - RENDER_SLACK_MS) return;
+    if (benching || !pacer.frame(ms)) return;
     const renderDt = Number.isFinite(lastRenderMs) ? (ms - lastRenderMs) / 1000 : 0;
     lastRenderMs = ms;
     updateFlash();
