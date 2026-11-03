@@ -1,4 +1,5 @@
 import {
+  ClampToEdgeWrapping,
   Data3DTexture,
   HalfFloatType,
   LinearFilter,
@@ -10,10 +11,13 @@ import {
   Vector2,
   type WebGPURenderer,
 } from "three/webgpu";
-import { clamp, exp, float, Fn, length, max, min, mix, screenUV, select, smoothstep, texture, uniform, vec2, vec3, vec4 } from "three/tsl";
+import { clamp, exp, float, Fn, length, max, min, mix, renderOutput, screenUV, select, smoothstep, texture, texture3D, uniform, vec2, vec3, vec4 } from "three/tsl";
+import { bloom } from "three/examples/jsm/tsl/display/BloomNode.js";
+import { lut3D } from "three/examples/jsm/tsl/display/Lut3DNode.js";
 import { BLOB_STRIDE, MAX_BLOBS } from "../sim/blobBuffer.ts";
 import { benchFrames, createGpuSync, type BenchResult } from "./bench.ts";
 import { createNoiseBaker, NOISE_SIZE } from "./cloudNoise.ts";
+import { fillLut, LUT_SIZE, NEUTRAL_GRADE, sameGrade, type Grade } from "./grade.ts";
 import { applyLook } from "./look.ts";
 import { eyeOf, PARALLAX_DEFAULTS, REDUCED_EYE_GAIN } from "./parallax.ts";
 import { createRain } from "./rain.ts";
@@ -66,6 +70,8 @@ export interface RenderStats {
   overflowDropped: number;
   /** False while the 3D noise is still baking (the clouds are smooth ellipsoids until then). */
   noiseReady: boolean;
+  /** Post chain: bloom strength and working resolution (pixels of its first target), grade intensity, and how often the LUT was rebuilt. */
+  post: { bloom: number; bloomPixels: number; grade: number; lutBuilds: number };
 }
 
 export async function createScene(renderer: WebGPURenderer, opts: SceneOptions = {}) {
@@ -181,7 +187,41 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     return vec4(select(debugView.lessThan(0.5), shown, select(debugView.lessThan(1.5), alphaView, cloudsView)), 1);
   });
 
-  const pipeline = new RenderPipeline(renderer, composite());
+  // Post (M6): bloom on the linear frame, then the output transform (sRGB), then the grade as a 3D LUT in display space.
+  // Bloom strength and grade intensity are uniforms, never toggles: 0 is "off", the passes still run, nothing recompiles.
+  const bloomStrength = uniform(0);
+  const bloomRadius = uniform(0.5);
+  const bloomThreshold = uniform(0.9);
+  // The bloom's high pass evaluates the composite itself at the bloom's resolution (a quarter of the pixels on hi and mid, a
+  // sixteenth on low), in a HalfFloat target, so values above 1 (sunlit tops, the flash) survive. Measured cheaper than
+  // rendering the composite once into a full-res target that both read (about 0.1 ms on every tier and scene).
+  const compositeNode = composite();
+  const bloomPass = bloom(compositeNode, bloomStrength, bloomRadius, bloomThreshold);
+  bloomPass.smoothWidth.value = 0.15;
+  const lutData = new Uint8Array(LUT_SIZE ** 3 * 4);
+  const lutTex = new Data3DTexture(lutData, LUT_SIZE, LUT_SIZE, LUT_SIZE);
+  lutTex.format = RGBAFormat;
+  lutTex.type = UnsignedByteType;
+  lutTex.minFilter = lutTex.magFilter = LinearFilter;
+  lutTex.wrapS = lutTex.wrapT = lutTex.wrapR = ClampToEdgeWrapping;
+  lutTex.unpackAlignment = 1;
+  let grade: Grade = NEUTRAL_GRADE;
+  fillLut(grade, LUT_SIZE, lutData);
+  lutTex.needsUpdate = true;
+  let lutBuilds = 1;
+  const gradeAmount = uniform(0);
+  /** The post settings as asked (`setPost`); the debug views zero them so the diagnostics see the frame ungraded. */
+  const postAsked = { bloom: 0, grade: 0 };
+  function applyPostGate(): void {
+    const on = debugView.value === 0 ? 1 : 0;
+    bloomStrength.value = postAsked.bloom * on;
+    gradeAmount.value = postAsked.grade * on;
+  }
+  const hdr = vec4(compositeNode.rgb.add(bloomPass.rgb), 1);
+  const display = clamp(renderOutput(hdr), 0, 1);
+  const pipeline = new RenderPipeline(renderer, lut3D(display, texture3D(lutTex), LUT_SIZE, gradeAmount));
+  // The output transform is in the node graph above (the LUT works in display space), so the pipeline must not add another.
+  pipeline.outputColorTransform = false;
 
   // CPU side of the volume pass: the render copy of the sim's blobs and the tile lists, rebuilt when anything they depend on changes.
   const tiles = createTileBuilder();
@@ -197,6 +237,9 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
   let lumpScale = 2.4;
   let dirty = true;
   let tileStats: TileStats = tiles.stats;
+  /** Drawing-buffer size, for the bloom's pixel count in stats. */
+  let drawW = 2;
+  let drawH = 2;
 
   /** Build the render copy and the tile lists from the latest blobs, eye and thickness, and mark both textures for upload. */
   function refresh(): void {
@@ -219,6 +262,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     aspect.value = width / height;
     const pr = renderer.getPixelRatio();
     rain.setPixelHeight(height * pr);
+    drawW = Math.round(width * pr);
+    drawH = Math.round(height * pr);
     scenery.bakeTarget.setSize(Math.max(2, Math.round(width * pr * tier.bake)), Math.max(2, Math.round(height * pr * tier.bake)));
     const m = marchSize(width, height, tier);
     marchTarget.setSize(m.width, m.height);
@@ -240,6 +285,7 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     cloud.jitterAmt.value = tier.jitter;
     light.sceneSteps.value = tier.sceneSteps;
     light.aoTaps.value = tier.aoTaps;
+    bloomPass.setResolutionScale(tier.bloomScale);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio));
   }
   applyTier();
@@ -314,6 +360,24 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
     /** Diagnostic: 1 shows the play clouds' alpha as grey, 2 the clouds alone over grey; 0 is the normal view. */
     setDebugView(mode: 0 | 1 | 2): void {
       debugView.value = mode;
+      applyPostGate();
+    },
+    /**
+     * Post (M6), from the resolved params via applyLook: bloom strength / radius / threshold, and the grade and its intensity.
+     * The LUT is rebuilt only when the grade itself changes (a weather blend), never for intensity alone.
+     */
+    setPost(b: { strength: number; radius: number; threshold: number }, g: Grade, intensity: number): void {
+      postAsked.bloom = b.strength;
+      postAsked.grade = intensity;
+      bloomRadius.value = b.radius;
+      bloomThreshold.value = b.threshold;
+      applyPostGate();
+      if (!sameGrade(g, grade)) {
+        grade = { ...g, shadow: [...g.shadow], highlight: [...g.highlight] };
+        fillLut(grade, LUT_SIZE, lutData);
+        lutTex.needsUpdate = true;
+        lutBuilds++;
+      }
     },
     /** Diagnostic: put the eye where a settled pointer at `side` (-1 left edge .. 0 middle .. 1 right edge) would (default Depth, no sway) and freeze the billows; null releases. */
     setDebugEye(side: number | null): void {
@@ -358,6 +422,12 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
         worstBlobsPerTile: tileStats.worstBlobsPerTile,
         overflowDropped: tileStats.overflowDropped,
         noiseReady,
+        post: {
+          bloom: bloomStrength.value,
+          bloomPixels: Math.floor(drawW * tier.bloomScale) * Math.floor(drawH * tier.bloomScale),
+          grade: gradeAmount.value,
+          lutBuilds,
+        },
       };
     },
     render(): void {
@@ -387,6 +457,8 @@ export async function createScene(renderer: WebGPURenderer, opts: SceneOptions =
       noiseTex.dispose();
       scenery.dispose();
       pipeline.dispose();
+      bloomPass.dispose();
+      lutTex.dispose();
     },
   };
 

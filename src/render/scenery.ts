@@ -1,5 +1,5 @@
 // Render-only scenery layers around the interactive play layer (flat layers with a depth factor):
-//   far bank (hazy, near the horizon) -> mid clouds (crisper) -> PLAY LAYER (cloudField.ts) -> near wisps (screen edges).
+//   far bank (hazy, near the horizon) -> mid clouds (crisper) -> PLAY LAYER (volume.ts) -> near wisps (screen edges).
 // Each layer is animated fractal noise thresholded into soft cloud; no sim, no raymarching, one fixed shader.
 // Everything tunable is a uniform on `scenery.layers`, so weather/quality can drive it without recompiling.
 //

@@ -12,7 +12,7 @@ export interface GameState {
   backend: "webgpu" | "webgl2" | null;
   /** Render quality tier: march resolution, step counts and octaves only; gameplay is identical on every tier. */
   tier: TierName;
-  /** The cloud pass: `{ tier, marchPixels, tileBytes, uploadBytes, worstBlobsPerTile, overflowDropped, noiseReady }` (see docs/RENDER.md). */
+  /** What the render passes cost and carry (`RenderStats` in src/render/scene.ts). */
   render: RenderStats;
   /** Rendered frames. */
   frame: number;
@@ -85,7 +85,7 @@ export interface GameHarnessApi {
   resetSettings(): void;
   /** Per slider: effective 0..1 `value`, whether the player `set` it, whether it is `enabled` (thunder: thunder weather only) and its friendly `word`. */
   sliderState(): Record<SliderKey, SliderState>;
-  /** The Sky panel: `{ ready, open, weather, scene, subtitle, sliders: [{ key, label, value, word, disabled, set }] }` as painted now. `ready` is false until the panel (a lazy chunk) is built. */
+  /** The Sky panel: `{ ready, open, weather, scene, subtitle, sliders: [{ key, label, value, word, disabled, set }] }` as painted now. `ready` is false until the panel (a lazy chunk) is built. Drive it like a player with real clicks on `.sky-dice`, `.sky-fold`, `[data-weather-btn]`, `[data-scene]`, `.sky-reset` and `input[data-slider]`. */
   ui(): UiReport;
   /** Unfold or fold the Sky panel (remembered across loads on desktop; applied when the panel is built if it is not yet). */
   setPanelOpen(open: boolean): void;

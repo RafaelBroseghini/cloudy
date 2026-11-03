@@ -24,7 +24,7 @@ describe("pickTier", () => {
   it("tiers only get cheaper", () => {
     const [hi, mid, low] = TIER_NAMES.map((n) => TIERS[n]);
     // (Not marchScale: low's is higher so a phone gets more pixels, and its pixel cap keeps it as cheap as ever on a desktop window.)
-    for (const k of ["marchMaxPixels", "steps", "lightSteps", "octaves", "fine", "ao", "jitter", "bake", "pixelRatio", "sceneSteps", "aoTaps"] as const) {
+    for (const k of ["marchMaxPixels", "steps", "lightSteps", "octaves", "fine", "ao", "jitter", "bake", "pixelRatio", "sceneSteps", "aoTaps", "bloomScale"] as const) {
       expect(hi![k]).toBeGreaterThanOrEqual(mid![k]);
       expect(mid![k]).toBeGreaterThanOrEqual(low![k]);
     }

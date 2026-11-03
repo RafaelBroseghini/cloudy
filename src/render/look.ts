@@ -24,7 +24,11 @@ const SCENERY_KEYS = [
   "farOpacity", "farTint", "farDrift", "farDensity", "midOpacity", "midTint", "midDrift", "midDensity", "nearOpacity",
   "nearTint", "nearDrift", "nearDensity", "parallaxStrength",
 ] as const;
-const POST_KEYS = ["fxExposure", "fxFlash", "fxFlashX", "fxFlashY"] as const;
+const POST_KEYS = [
+  "fxExposure", "fxFlash", "fxFlashX", "fxFlashY", "fxBloom", "fxBloomThreshold", "fxBloomRadius", "fxGrade", "fxContrast",
+  "fxSaturation", "fxTemperature", "fxLift", "fxShadowTintR", "fxShadowTintG", "fxShadowTintB", "fxHighlightTintR",
+  "fxHighlightTintG", "fxHighlightTintB",
+] as const;
 const RAIN_KEYS = ["rainRate", "rainAngle", "rainSpeed", "windX"] as const;
 const BREEZE_KEYS = ["breezeSpeed", "breezeAngle"] as const;
 
@@ -43,6 +47,9 @@ const TWILIGHT_SUN = 0.35;
 /** How far the shade and mid colours move toward the sky's colours at full twilight. */
 const SHADOW_TINT = 0.5;
 const MID_TINT = 0.25;
+/** Bloom strength added at a full flash, and the fraction of the threshold it takes away (the flash-lit cloud reaches about 1.4). */
+const FLASH_BLOOM = 0.35;
+const FLASH_THRESHOLD_DROP = 0.35;
 const luma = (c: { r: number; g: number; b: number }): number => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 const DEFAULTS = defaultValues();
@@ -163,4 +170,18 @@ export function applyLook(scene: CloudyScene, v: LookValues): void {
   post.flash.value = g("fxFlash");
   post.flashX.value = g("fxFlashX");
   post.flashY.value = g("fxFlashY");
+  // A strike glows: the flash raises the bloom and lowers its threshold (render-only; the sim never sees either).
+  const flash = clamp01(g("fxFlash"));
+  scene.setPost(
+    { strength: g("fxBloom") + FLASH_BLOOM * flash, radius: g("fxBloomRadius"), threshold: g("fxBloomThreshold") * (1 - FLASH_THRESHOLD_DROP * flash) },
+    {
+      contrast: g("fxContrast"),
+      saturation: g("fxSaturation"),
+      temperature: g("fxTemperature"),
+      lift: g("fxLift"),
+      shadow: [g("fxShadowTintR"), g("fxShadowTintG"), g("fxShadowTintB")],
+      highlight: [g("fxHighlightTintR"), g("fxHighlightTintG"), g("fxHighlightTintB")],
+    },
+    g("fxGrade"),
+  );
 }
