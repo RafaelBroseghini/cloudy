@@ -12,7 +12,8 @@
     "test": "vitest run",
     "preview": "vite preview",
     "preview:pages": "npm run build:pages && vite preview --base=/cloudy/ --host 127.0.0.1 --port 43202 --strictPort",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "tla": "node scripts/tla.mjs"
   },
   "dependencies": {
     "@fontsource/fredoka": "5.3.0",

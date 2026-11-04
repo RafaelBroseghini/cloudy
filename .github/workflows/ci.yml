@@ -1,4 +1,5 @@
-# Typecheck, lint, unit tests and the production build, on every pull request and every push to main.
+# Typecheck, lint, unit tests and the production build, plus the TLA+ models (docs/TLA.md), on every pull request and
+# every push to main.
 # A green run on a push to main is what triggers the Pages deploy (pages.yml).
 # `npm run verify` (real browser, WebGPU needs a visible window) is run locally, not here.
 name: CI
@@ -43,3 +44,31 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  tla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # The pinned jar; its version and SHA-256 live in scripts/tla.mjs, so a bump there misses the cache.
+      - name: Cache TLC
+        uses: actions/cache@v6
+        with:
+          path: .cache/tla/*.jar
+          key: tla2tools-${{ hashFiles('scripts/tla.mjs') }}
+
+      # No npm ci: the script uses only Node built-ins.
+      - name: Model-check
+        run: npm run tla
