@@ -25,7 +25,7 @@ Weather: `TypeOK` (a transition has a duration and progress in [0, 1)), `TargetI
 
 **Armed merge is a step property.** `armPairs` and `mergeTouching` run in the same step, so "merges on the next topology step" means "is merged when this step's `mergeTouching` returns". `ArmedTouchingMerge` says: after the merge loop, no two touching clouds are armed. The spec runs the loop pass by pass with its real bound (`MAX_BLOBS`, scaled to the blob count), so the property tests that the bound is enough, not a fixpoint written into the spec.
 
-**Liveness is bounded.** The fixed-step loop always takes the next step, so "eventually arms" is "arms within so many steps", which is stronger and is a plain invariant: no record or ghost pair outlives the largest tau. TLC's fairness checking also re-evaluates the merge loop's recursive operators without caching and does not finish on this spec.
+**Liveness is bounded.** The fixed-step loop always takes the next step, so "eventually arms" is "arms within so many steps", which is stronger and is a plain invariant: no record or ghost pair outlives the largest tau. The unbounded form (`~>` under weak fairness of both step actions) did not finish within a minute even on three blobs, where the safety check takes a second.
 
 ## How the spec maps to the code
 
@@ -55,18 +55,18 @@ Weather: `Advance` is `advanceWeather`, `StartTransition` is `startTransition`, 
 - **Time is an age.** A record stores `step - splitStep`, not the step, so the state space is finite. Weather and the dev panel can change `tau` on any step, so each step picks tau from `TauMin..TauMax`. `PARAM_SPECS.tau.min` makes `tauSteps` at least 1; with 0, records would arm in the step they are made and NoThrash would be vacuous, so `ASSUME` rejects it.
 - **Every touching cross pair gets a merge spring.** `mergeClouds` adds the `MAX_MERGE_SPRINGS` nearest; with four blobs a pair of clouds has at most four cross pairs, so the cap never binds (an `ASSUME` says so). Only "at least one spring" matters for connectivity.
 - **Scenes start connected.** `Init` starts from any spring graph with the clouds as its components and an empty gate, as `loadScene` leaves it. If a shipped scene had a disconnected cloud, it would split at the first unrelated break, with no cause on screen. `sim.test.ts` checks this only for `m1`.
-- **Size.** Three blobs (`Topology.cfg`) runs in a second; four (`Topology.n4.cfg`) is the first size with three clouds next to a fourth, which the two findings below need. Five blobs multiplies the break and touch choices past what fits in CI. `SYMMETRY` would be unsound: the merge order depends on blob indices.
+- **Size.** Three blobs (`Topology.cfg`) runs in a second and already shows both findings below. Four (`Topology.n4.cfg`) adds clouds of several blobs on both sides of a merge and two records of different ages clashing in `RecordMerge`: keeping the older split instead passes on three blobs and fails on four. Five blobs multiplies the break and touch choices past what fits in CI. `SYMMETRY` would be unsound: the merge order depends on blob indices.
 - **Not modelled:** positions, forces, the cursor, creep, rest offsets, and mass changes from type multipliers (topology never reads mass; `MassConserved` uses distinct masses so a lost or doubled blob shows). Weather blends are counted in whole steps; the code adds `dt / duration` in floating point, so a blend can take one step more than the spec's.
 - **Not modelled: strike ordering.** "Heard thunder minus flash peak = d" is one evaluation of `thunderStart` and `heardAt` per strike, with no interleaving for a model checker to explore; `strikes.test.ts` checks it for any latency.
 
 ## Where the code differs from PLAN
 
-**"Armed + touching merges on the next step" does not hold pairwise, by design.** `PlanPairwiseMerge` states PLAN's sentence literally and is left out of the cfgs because TLC refutes it in two steps (`Topology.n4`):
+**"Armed + touching merges on the next step" does not hold pairwise, by design.** `PlanPairwiseMerge` states PLAN's sentence literally and is left out of the cfgs because TLC refutes it within one sim step on three blobs:
 
-1. Cloud {1,2,3} splits into {2} and {1,3}; they are unarmed against each other. Cloud {4} touches both and is armed against both.
-2. `mergeTouching` visits {1,3} first (smallest blob), merges it with {4}, and the {2} record retargets to {1,3,4}. {2} and {4} were armed and touching, and stay apart.
+1. Cloud {2,3} splits into {2} and {3}; they are unarmed against each other. Cloud {1} touches both and is armed against both.
+2. `mergeTouching` visits {1} first, merges it with {2} (the first armed, touching partner), and the {3} record retargets to {1,2}. {1} and {3} were armed and touching, and stay apart.
 
-Merging both pairs would join {2} with {1,3} in the step they split, which is exactly what NoThrash forbids, so the code is right and PLAN's sentence is loose. `ArmedTouchingMerge` is the version the code keeps. The outcome depends on which cloud has the smaller blob: had {2} come first, {2} and {4} would have merged instead.
+Merging both pairs would join {2} with {3} in the step they split, which is exactly what NoThrash forbids, so the code is right and PLAN's sentence is loose. `ArmedTouchingMerge` is the version the code keeps. Which pair merges depends on blob indices (the order `mergeTouching` visits clouds in), not on geometry: numbered the other way, {1} would have joined {3}.
 
 **The gate is stricter than "split pairs".** Records follow clouds, not blobs: when a cloud merges and later splits along a different line, every piece inherits the merged cloud's records, including pieces whose blobs never split from the other side. TLC shows it within two sim steps: {1} splits from {3}; {1} merges with {2,4}; {1,2,4} splits back into {1} and {2,4}, and {2,4} is now unarmed against {3}. NoThrash holds; the price is that such a piece waits up to tau (or until it drifts beyond `d_release`) before it can merge with that cloud.
 
@@ -75,7 +75,7 @@ Merging both pairs would join {2} with {1,3} in the step they split, which is ex
 - `npm run tla` runs TLC on every `tla/*.cfg`; a cfg checks the spec named before its first dot (`Topology.n4.cfg` checks `Topology.tla`). `TLA_ONLY=Topology.n4 npm run tla` runs one model.
 - `scripts/tla.mjs` fetches the pinned `tla2tools.jar` into `.cache/tla` (gitignored) and checks its SHA-256; TLC's working files go there too, so `tla/` stays clean. GitHub lists no digest for the pinned release, so the hash in the script was recorded when the version was pinned. Java 11 or later is required.
 - Exit code is non-zero on any violation, deadlock or TLC error; TLC prints the counterexample trace.
-- After editing the spec, break it on purpose once: drop `~IsUnarmed(...)` from `PassFrom` and `Topology.n4` must report `NoThrash` violated in two steps. Making `RecordMerge` keep the older split, dropping inheritance in `RecordSplit`, or setting `MaxPasses = 1` must also fail (the last on `ArmedTouchingMerge`). A property that never fails checks nothing.
+- After editing the spec, break it on purpose once: drop `~IsUnarmed(...)` from `PassFrom` and TLC must report `NoThrash` violated within one sim step. Dropping inheritance in `RecordSplit` must also fail `NoThrash`, setting `MaxPasses = 1` must fail `ArmedTouchingMerge`, and making `RecordMerge` keep the older split must fail `NoThrash` on `Topology.n4`. A property that never fails checks nothing.
 - TLC re-evaluates a `LET` at every use, and operator arguments lazily. The actions bind expensive values once with `\E x \in {e}`; without that, the four-blob model is several times slower.
 
 Measured when the models were added (16 threads): `Topology` 196 distinct states in about 1 s, `Topology.n4` 11,172 distinct states (751k generated) in about 4 s, `Weather` 280 distinct states in about 1 s.
