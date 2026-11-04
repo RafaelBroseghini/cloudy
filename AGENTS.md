@@ -21,9 +21,10 @@ export PATH=~/.local/share/fnm/node-versions/v24.18.1/installation/bin:$PATH
 | `npm run build` | typecheck + `vite build` |
 | `npm run build:pages` | `build` with `--base=/cloudy/`, the base the Pages deploy uses |
 | `npm run preview:pages` | Builds for Pages, then serves it at http://127.0.0.1:43202/cloudy/ |
+| `npm run tla` | TLC on every `tla/*.cfg` (fetches the pinned `tla2tools.jar`; needs Java 11+) |
 | `npm run verify` | Build, then drive the game in a real browser on WebGPU, forced WebGL2 and a phone viewport; screenshots in `artifacts/verify/` |
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every PR and push to main; `pages.yml` deploys a green push to main to GitHub Pages at the `/cloudy/` base path. `npm run build:pages` / `npm run preview:pages` (port 43202) reproduce the Pages build locally. `verify` is local only (needs a browser and a visible window for WebGPU).
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, test, build and `tla` on every PR and push to main; `pages.yml` deploys a green push to main to GitHub Pages at the `/cloudy/` base path. `npm run build:pages` / `npm run preview:pages` (port 43202) reproduce the Pages build locally. `verify` is local only (needs a browser and a visible window for WebGPU).
 
 ## Before you finish
 
@@ -68,6 +69,7 @@ Drive and read state through `window.__GAME__` (`src/harness.ts`), never by scra
 - `docs/SETTINGS.md`: why the player settings are shaped as they are, and storage (`src/settings`).
 - `docs/UI.md`: the Sky panel (structure, tokens, a11y, state flow, reduced motion).
 - `docs/RENDER.md`: render passes and post, quality tiers, measured costs.
+- `docs/TLA.md`: the TLA+ models in `tla/` (topology, weather blend): what is checked, how it maps to the code, what it abstracts.
 - `docs/HARNESS.md`: how to drive `window.__GAME__` without fooling yourself, with examples (the API is `GameHarnessApi` in `src/harness.ts`).
 - `.agents/skills/verify`: browser verification (real WebGPU needs a visible window under WSLg).
 - `public/audio/`: thunder clips; every file must be CC0/public domain and credited in `public/audio/CREDITS.md`.

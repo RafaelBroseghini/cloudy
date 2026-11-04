@@ -28,7 +28,7 @@ A 2.5D browser toy played with mouse, trackpad or touch. The cursor pushes throu
 - Physics: Box2D v3 (`box2d3-wasm`) for blob bodies and spring joints; see `docs/SIM.md` for why and where M1 departs from the model below.
 - Web Audio API directly for thunder. Plain DOM range inputs for player sliders; lil-gui only for dev panels.
 - Settings: versioned, schema-validated JSON in localStorage, clamped on load, defaults when invalid.
-- Tests: Vitest + fast-check. TLA+ model later.
+- Tests: Vitest + fast-check. TLA+ models (TLC) of the cloud topology and the weather blend, `docs/TLA.md`.
 
 ## Layers
 
@@ -91,11 +91,13 @@ Gameplay is identical on every tier. Tiers change the pixel ratio cap, the cloud
 | M5 | done: six preset scenes, seven player sliders, dice randomize, saved settings with Valibot validation, Sky panel |
 | M6 | done: bloom and a 3D LUT grade per weather (`docs/RENDER.md`). Sunset and purple dusk come from the time-of-day slider |
 | M7 | partly done: the `hi`/`mid`/`low` tiers exist (Extra), and `?stats` reads frame times on a real device (`docs/RENDER.md`). Not started: frame-time governor, automatic tier switching, real-device checks (iPhone, Android phone, iPad) |
-| Later | TLA+ model (invariants listed below) |
+| Later | done: TLA+ models of the cloud topology (split, relabel, the arming gate, merge passes) and the weather blend, checked by TLC in CI (`npm run tla`, `docs/TLA.md`). Strike ordering and the continuous invariants stay with fast-check |
 
-Not built yet, in build order: M7's governor, automatic tiers and device checks; the TLA+ model; M4 last. Also not built and not scheduled: the analytic (Preetham) sky; the sky is the gradient model only.
+Not built yet, in build order: M7's governor, automatic tiers and device checks; M4 last. Also not built and not scheduled: the analytic (Preetham) sky; the sky is the gradient model only.
 
-## Invariants to keep (tests now, TLA+ later)
+## Invariants to keep (tests, plus TLA+ for the discrete ones)
+
+`docs/TLA.md` says which are model-checked and where the code reads them more precisely than the lines below (armed + touching merges only where NoThrash allows).
 
 - BlobPartition: every blob is in exactly one non-empty cloud. SpringsInternal: every spring joins blobs of one cloud. CloudsConnected after relabel.
 - NoThrash: a split pair cannot merge until armed. Armed + touching merges on the next topology step.
